@@ -1,0 +1,304 @@
+<title>SDLC Live Run Desk</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: left rail of stage nodes, main desk with the stage's documents and an approval gate pinned under them. */
+:root{
+  --bg:#f2f5f8; --surface:#ffffff; --surface-2:#f7f9fb; --ink:#14202b; --muted:#5a6978; --line:#d8e0e8;
+  --accent:#2556d9; --accent-bg:#e6edfc;
+  --ok:#17794a; --ok-bg:#e3f4ea; --warn:#8a5300; --warn-bg:#fdf0d5; --warn-line:#e8b24a;
+  --bad:#a62b2b; --bad-bg:#fbe7e7; --code-bg:#eef2f6;
+  --font-ui:'Manrope',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --font-mono:'JetBrains Mono',ui-monospace,'SFMono-Regular',Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e141a; --surface:#151d25; --surface-2:#101820; --ink:#e6ecf2; --muted:#92a1b0; --line:#263442;
+    --accent:#7ba3ff; --accent-bg:#1b2a47;
+    --ok:#5ed39a; --ok-bg:#133425; --warn:#f0c168; --warn-bg:#3a2c0e; --warn-line:#8a6a22;
+    --bad:#ff8e8e; --bad-bg:#3d1b1b; --code-bg:#1b2630; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0e141a; --surface:#151d25; --surface-2:#101820; --ink:#e6ecf2; --muted:#92a1b0; --line:#263442;
+  --accent:#7ba3ff; --accent-bg:#1b2a47;
+  --ok:#5ed39a; --ok-bg:#133425; --warn:#f0c168; --warn-bg:#3a2c0e; --warn-line:#8a6a22;
+  --bad:#ff8e8e; --bad-bg:#3d1b1b; --code-bg:#1b2630; color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-ui);font-size:14px;line-height:1.55;
+  padding-block:20px 40px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.wrap{max-width:1240px;margin:0 auto}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mono{font-family:var(--font-mono)}
+header.top{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:16px}
+header.top h1{font-size:22px;line-height:1.2;margin:0;font-weight:700;letter-spacing:-.01em;text-wrap:balance}
+header.top .sub{color:var(--muted);font-size:13px;margin-top:4px}
+.tools{display:flex;gap:8px;align-items:center}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:8px 14px;font-weight:600;font-size:13px}
+.btn:hover{border-color:var(--muted)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.app{display:grid;grid-template-columns:292px minmax(0,1fr);gap:20px;align-items:start}
+.rail{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;min-width:0}
+.rail h2,.logh{font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:0 0 10px;font-weight:500}
+.nodes{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:0}
+.node{display:grid;grid-template-columns:28px minmax(0,1fr);gap:10px;position:relative;padding:0 0 14px;cursor:pointer;background:none;border:0;text-align:left;width:100%}
+.node:last-child{padding-bottom:0}
+.node:not(:last-child)::before{content:"";position:absolute;left:13px;top:28px;bottom:0;width:2px;background:var(--line)}
+.node.s-done:not(:last-child)::before,.node.s-skip:not(:last-child)::before{background:var(--ok)}
+.dot{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:var(--surface-2);border:2px solid var(--line);color:var(--muted);z-index:1}
+.s-done .dot{background:var(--ok);border-color:var(--ok);color:#fff}
+.s-skip .dot{background:var(--surface-2);border-color:var(--ok);color:var(--ok)}
+.s-wait .dot{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn)}
+.s-run .dot,.s-rework .dot{background:var(--accent-bg);border-color:var(--accent);color:var(--accent)}
+.s-failed .dot{background:var(--bad-bg);border-color:var(--bad);color:var(--bad)}
+.node.sel .nm{color:var(--accent)}
+.nm{font-weight:700;font-size:14px;line-height:1.25;display:block}
+.ag{font-family:var(--font-mono);font-size:11px;color:var(--muted);display:block;overflow-wrap:anywhere}
+.stt{font-size:12px;margin-top:3px;display:block;color:var(--muted)}
+.s-wait .stt{color:var(--warn);font-weight:600}.s-done .stt,.s-skip .stt{color:var(--ok)}.s-failed .stt{color:var(--bad);font-weight:600}.s-run .stt,.s-rework .stt{color:var(--accent)}
+.logbox{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}
+.log{list-style:none;margin:0;padding:0;font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:6px;max-height:190px;overflow:auto}
+.log b{font-family:var(--font-mono);font-weight:500;color:var(--ink);margin-right:6px;font-size:11px}
+.desk{min-width:0;display:flex;flex-direction:column;gap:14px}
+.banner{background:var(--warn-bg);border:1px solid var(--warn-line);color:var(--warn);border-radius:10px;padding:10px 14px;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;font-weight:600}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;min-width:0}
+.sh{padding:16px 18px 14px;border-bottom:1px solid var(--line)}
+.sh .row{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.sh h2{margin:0;font-size:19px;line-height:1.25;font-weight:700}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;padding:3px 10px;border-radius:999px;background:var(--surface-2);color:var(--muted);border:1px solid var(--line);white-space:nowrap}
+.pill.wait{background:var(--warn-bg);color:var(--warn);border-color:var(--warn-line)}
+.pill.done,.pill.skip{background:var(--ok-bg);color:var(--ok);border-color:transparent}
+.pill.run{background:var(--accent-bg);color:var(--accent);border-color:transparent}
+.pill.failed{background:var(--bad-bg);color:var(--bad);border-color:transparent}
+.flow{display:grid;grid-template-columns:minmax(0,1fr) 22px minmax(0,1fr);gap:8px;align-items:center;margin-top:12px;font-size:12px}
+.flow .box{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0}
+.flow .k{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:2px}
+.flow .arr{color:var(--muted);text-align:center;font-size:16px}
+.rule{margin:10px 0 0;font-size:12.5px;color:var(--muted)}
+.rule b{color:var(--ink);font-weight:700}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;padding:12px 18px 0}
+.tab{font-family:var(--font-mono);font-size:12px;border:1px solid var(--line);background:var(--surface-2);border-radius:8px;padding:5px 10px;color:var(--muted)}
+.tab.on{background:var(--accent-bg);border-color:var(--accent);color:var(--accent);font-weight:500}
+.viewer{margin:12px 18px 18px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);padding:6px 20px 18px;max-height:min(58vh,540px);overflow:auto}
+.md{font-size:14px;line-height:1.65;max-width:78ch}
+.md h1{font-size:19px;margin:16px 0 8px}.md h2{font-size:16.5px;margin:20px 0 6px}.md h3,.md h4{font-size:14.5px;margin:16px 0 4px}
+.md p{margin:6px 0}.md ul,.md ol{padding-left:22px;margin:6px 0}.md li{margin:3px 0}
+.md code{font-family:var(--font-mono);font-size:12.5px;background:var(--code-bg);padding:1px 5px;border-radius:5px}
+.md pre{background:var(--code-bg);padding:12px 14px;border-radius:8px;overflow:auto;margin:10px 0}
+.md pre code{background:none;padding:0}
+.md table{display:block;overflow-x:auto;border-collapse:collapse;margin:10px 0;font-size:13px}
+.md th,.md td{border:1px solid var(--line);padding:6px 10px;text-align:left;vertical-align:top}
+.md th{background:var(--code-bg)}
+.md hr{border:0;border-top:1px solid var(--line);margin:18px 0}
+.md blockquote{margin:8px 0;padding:2px 12px;border-left:3px solid var(--line);color:var(--muted)}
+.gate{margin:0 18px 18px;border-radius:10px;padding:14px 16px;display:flex;gap:14px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.gate.need{background:var(--warn-bg);border:1.5px solid var(--warn-line);color:var(--warn)}
+.gate.fail{background:var(--bad-bg);border:1.5px solid var(--bad);color:var(--bad)}
+.gate.ok{background:var(--ok-bg);border:1px solid transparent;color:var(--ok)}
+.gate .gt{flex:1;min-width:220px}
+.gate .gt b{display:block;font-size:15px;font-weight:700}
+.gate .gt span{font-size:13px}
+.gate .acts{display:flex;gap:8px;flex-wrap:wrap}
+.gate .btn.go{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.note{margin:-6px 18px 16px;font-size:12.5px;color:var(--muted)}
+.note input{width:100%;margin-top:6px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);font:inherit}
+.empty{padding:28px 22px;text-align:left}
+.empty h2{margin:0 0 6px;font-size:19px}.empty p{margin:0 0 14px;color:var(--muted);max-width:62ch}
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:0 0 16px}
+.steps div{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px}
+.steps b{display:block;font-size:13px}
+.sum{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:14px 0}
+.sum div{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:12px}
+.sum .n{font-size:22px;font-weight:700;line-height:1.1}
+.sum .l{font-size:12px;color:var(--muted)}
+.spin{animation:spin 1s linear infinite;transform-origin:50% 50%}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation:none}}
+@media (max-width:860px){
+  .app{grid-template-columns:minmax(0,1fr)}
+  .nodes{flex-direction:row;overflow-x:auto;gap:12px;padding-bottom:6px}
+  .node{min-width:150px;padding:0}.node::before{display:none!important}
+  .flow{grid-template-columns:minmax(0,1fr)}.flow .arr{transform:rotate(90deg)}
+}
+.pill.live{background:var(--ok-bg);color:var(--ok);border-color:transparent}
+.pill.off{background:var(--bad-bg);color:var(--bad);border-color:transparent}
+.dotl{width:8px;height:8px;border-radius:50%;background:currentColor;display:inline-block}
+.working{margin:12px 18px 0;padding:10px 14px;border-radius:10px;background:var(--accent-bg);color:var(--accent);display:flex;gap:10px;align-items:center;font-weight:600}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1 id="ttl">SDLC run desk</h1>
+      <div class="sub">Feature <span class="mono" id="feat">...</span> · live view of the real files each agent writes</div>
+    </div>
+    <div class="tools"><span class="pill" id="live">connecting</span></div>
+  </header>
+  <div class="app">
+    <aside class="rail" aria-label="Pipeline stages">
+      <h2>Pipeline</h2>
+      <div class="nodes" id="nodes"></div>
+      <div class="logbox"><div class="logh">Run log</div><ul class="log" id="log"></ul></div>
+    </aside>
+    <main class="desk" id="desk"></main>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script>
+var STAGES = [
+ {n:'Business PM', a:'business-product-manager', next:'Technical PM',
+  reads:'The raw business request', writes:'business-requirement.md',
+  rule:'Describes the business need only. It must not look at the code or choose a technical design.'},
+ {n:'Technical PM', a:'technical-product-manager', next:'Software Architect',
+  reads:'business-requirement.md and the real repository', writes:'technical-discovery.md, epic.md, stories.md',
+  rule:'Investigates what already exists in the system. It must not change any application code.'},
+ {n:'Software Architect', a:'software-architect', next:'Developer',
+  reads:'Requirement, epic and stories, re-checked against the source', writes:'architecture.md',
+  rule:'Designs the smallest change that fits existing patterns. It must not write application code.'},
+ {n:'Developer', a:'developer', next:'DBA',
+  reads:'Everything above, plus the approved architecture', writes:'Code, tests and implementation.md',
+  rule:'Builds exactly what was scoped. If the architecture is wrong, it corrects the document first.'},
+ {n:'DBA', a:'dba', next:'Reviewer',
+  reads:'Discovery, architecture and the Developer\'s work', writes:'schema-execution.md and the migration',
+  rule:'Runs only when the feature needs a schema change; otherwise it is skipped with evidence.'},
+ {n:'Reviewer', a:'reviewer', next:'the end of the run',
+  reads:'The full trail plus the live, running system', writes:'review.md ending in PASS or FAIL',
+  rule:'Verifies independently of the Developer and must not modify code. A FAIL goes back to the Developer.'}
+];
+var LABEL = {pend:'Not started',run:'Agent working',wait:'Needs your approval',done:'Approved',skip:'Skipped, nothing to review',failed:'FAIL, sent back',rework:'Developer reworking'};
+var ICON = {
+ done:'<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg>',
+ skip:'<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 8h8"/></svg>',
+ wait:'<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5.5 3.5v9M10.5 3.5v9"/></svg>',
+ run:'<svg class="spin" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8 2.5a5.5 5.5 0 1 0 5.5 5.5"/></svg>',
+ failed:'<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>',
+ pend:'<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="8" r="2.2"/></svg>'
+};
+ICON.rework = ICON.run;
+
+var ST = null, last = '', V = {sel:0, manual:false, tab:[0,0,0,0,0,0], noteOpen:false, lastActive:-1, sent:{}};
+
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function md(src){return window.marked?window.marked.parse(src):'<pre>'+esc(src)+'</pre>'}
+function activeIdx(){
+  var s=ST.stages,i;
+  for(i=0;i<6;i++){if(s[i]==='run'||s[i]==='rework'||s[i]==='wait')return i}
+  for(i=5;i>=0;i--){if(s[i]!=='pend')return i}
+  return 0;
+}
+function verdict(){
+  var f=(ST.files[5]||[])[0];if(!f)return '';
+  var ls=f.md.trim().split('\n').filter(function(l){return l.trim()&&l.trim()!=='```'});
+  var l=(ls[ls.length-1]||'').trim();
+  return l==='PASS'||l==='FAIL'?l:'';
+}
+function nodes(){
+  return STAGES.map(function(s,i){
+    var st=ST.stages[i],label=LABEL[st];
+    if(i===5&&st==='wait'&&verdict())label='Verdict '+verdict()+(verdict()==='FAIL'?' - your decision':' - needs approval');
+    var n=(ST.files[i]||[]).length;
+    return '<button class="node s-'+st+(V.sel===i?' sel':'')+'" data-go="'+i+'" type="button"><span class="dot">'+ICON[st]+'</span><span><span class="nm">'+(i+1)+'. '+s.n+'</span><span class="ag">'+s.a+(n?' · '+n+' file'+(n>1?'s':''):'')+'</span><span class="stt">'+label+'</span></span></button>';
+  }).join('');
+}
+function decisionFor(i){
+  var r=null;(ST.decisions||[]).forEach(function(d){if(d.stage===i)r=d});return r;
+}
+function gate(i){
+  var st=ST.stages[i],d=decisionFor(i);
+  if(st==='wait'){
+    var v=i===5?verdict():'';
+    if(v==='FAIL'){
+      return '<div class="gate fail"><div class="gt"><b>Reviewer verdict: FAIL</b><span>The run cannot finish until the findings are fixed and re-reviewed.</span></div><div class="acts"><button class="btn go" data-act="send-back" type="button">Send back to Developer</button></div></div>'+(d?'<div class="note">Your decision (<b>'+esc(d.action)+'</b>) was sent. Waiting for the orchestrator to apply it.</div>':'');
+    }
+    var nx=i===5?'finish the run':'start the '+STAGES[i].next+' stage';
+    return '<div class="gate need"><div class="gt"><b>Approval required</b><span>Read the document above. The next agent cannot '+nx+' until you approve.</span></div><div class="acts"><button class="btn" data-act="changes" type="button">Request changes</button><button class="btn go" data-act="approve" type="button">Approve and continue</button></div></div>'
+      +(V.noteOpen?'<div class="note">Describe what should change, then press Enter. The note goes back to the agent, which redoes the stage.<input id="note" type="text" placeholder="For example: also cover guest orders" aria-label="Requested changes"></div>':'')
+      +(d?'<div class="note">Your decision (<b>'+esc(d.action)+'</b>'+(d.note?': '+esc(d.note):'')+') was sent. Waiting for the orchestrator to apply it.</div>':'');
+  }
+  if(st==='done'||st==='skip'){
+    return '<div class="gate ok"><div class="gt"><b>'+(st==='skip'?'Skipped, nothing to approve':'Approved')+'</b><span>'+(st==='skip'?'The evidence shows no schema change was needed.':'This stage is closed and its documents are the input for the next agent.')+'</span></div></div>';
+  }
+  if(st==='failed'){
+    return '<div class="gate fail"><div class="gt"><b>Sent back to the Developer</b><span>The Developer fixes the findings and the Reviewer checks again.</span></div></div>';
+  }
+  return '';
+}
+function stageView(i){
+  var s=STAGES[i],st=ST.stages[i],f=ST.files[i]||[];
+  var tab=Math.min(V.tab[i],Math.max(f.length-1,0));
+  var pillTxt=LABEL[st];
+  if(i===5&&st==='wait'&&verdict())pillTxt='Verdict '+verdict();
+  var head='<div class="sh"><div class="row"><div><div class="ag mono" style="font-size:12px;color:var(--muted)">Agent: '+s.a+'</div><h2>'+(i+1)+'. '+s.n+'</h2></div><span class="pill '+(st==='rework'?'run':st)+'">'+ICON[st]+' '+pillTxt+'</span></div>'
+   +'<div class="flow"><div class="box"><span class="k">Reads</span>'+esc(s.reads)+'</div><div class="arr" aria-hidden="true">&rarr;</div><div class="box"><span class="k">Writes</span>'+esc(s.writes)+'</div></div>'
+   +'<p class="rule"><b>Boundary.</b> '+esc(s.rule)+'</p></div>';
+  var working=(st==='run'||st==='rework')?'<div class="working"><span>'+ICON.run+'</span>The '+esc(s.a)+' agent is working'+(st==='rework'?' on the Reviewer\'s findings':'')+'. Files appear below as it writes them.</div>':'';
+  if(!f.length){
+    if(st==='pend')return '<div class="card">'+head+'<div class="empty"><p style="margin:0">This agent has not started. It begins only after the previous stage is approved.</p></div></div>';
+    return '<div class="card">'+head+working+'<div class="empty"><p style="margin:0">No files written yet.</p></div>'+gate(i)+'</div>';
+  }
+  var tabs='<div class="tabs" role="tablist">'+f.map(function(x,k){return '<button class="tab'+(k===tab?' on':'')+'" data-tab="'+k+'" type="button">'+esc(x.name)+'</button>'}).join('')+'</div>';
+  return '<div class="card">'+head+working+tabs+'<div class="viewer"><div class="md">'+md(f[tab].md)+'</div></div>'+gate(i)+'</div>';
+}
+function intro(){
+  return '<div class="card"><div class="empty"><h2>Waiting for the run to start</h2><p>Six agents work in order. Each one writes a document that appears here as soon as it is saved. You read it, approve it, and only then does the next agent start. This page updates by itself.</p>'
+   +'<div class="steps"><div><b>1. Agent works</b>Its files show up here live.</div><div><b>2. You review</b>Documents and code changes open in this window.</div><div><b>3. You approve</b>Click here or tell Claude in the chat. Either works.</div></div></div></div>';
+}
+function summary(){
+  var done=ST.stages.filter(function(x){return x==='done'}).length,skip=ST.stages.filter(function(x){return x==='skip'}).length;
+  return '<div class="card"><div class="empty"><h2>Run complete</h2><p>Every stage was approved by you before the next one started.</p>'
+   +'<div class="sum"><div><div class="n">'+(done+skip)+'/6</div><div class="l">stages closed'+(skip?', '+skip+' skipped':'')+'</div></div><div><div class="n">'+(verdict()||'-')+'</div><div class="l">final review verdict</div></div><div><div class="n">'+(ST.changedCount||0)+'</div><div class="l">code files changed</div></div></div></div></div>';
+}
+function render(){
+  var vw=document.querySelector('.viewer'),top=vw?vw.scrollTop:0,pg=window.scrollY;
+  var ai=activeIdx();
+  if(ai!==V.lastActive){V.lastActive=ai;V.manual=false;V.noteOpen=false}
+  if(!V.manual)V.sel=ai;
+  document.getElementById('ttl').textContent=ST.title||'SDLC run desk';
+  document.getElementById('feat').textContent=ST.feature;
+  document.getElementById('nodes').innerHTML=nodes();
+  document.getElementById('log').innerHTML=ST.log.length?ST.log.map(function(l){return '<li><b>'+esc(l.t)+'</b>'+esc(l.m)+'</li>'}).join(''):'<li>No activity yet.</li>';
+  var main='',anyStarted=ST.stages.some(function(x){return x!=='pend'});
+  var waiting=-1;for(var k=0;k<6;k++){if(ST.stages[k]==='wait')waiting=k}
+  if(waiting>-1&&V.sel!==waiting&&!ST.done)main+='<div class="banner"><span>'+STAGES[waiting].n+' is waiting for your approval.</span><button class="btn" data-go="'+waiting+'" type="button">Go to that stage</button></div>';
+  if(!anyStarted)main+=intro();
+  else{if(ST.done&&ST.stages[5]==='done')main+=summary();main+=stageView(V.sel)}
+  document.getElementById('desk').innerHTML=main;
+  var nv=document.querySelector('.viewer');if(nv)nv.scrollTop=top;window.scrollTo(0,pg);
+  var el=document.getElementById('note');if(el)el.focus();
+}
+function setLive(ok){
+  var p=document.getElementById('live');
+  p.className='pill '+(ok?'live':'off');
+  p.innerHTML=ok?'<span class="dotl"></span> live · updated '+new Date().toLocaleTimeString():'connection lost, retrying';
+}
+function poll(){
+  fetch('/api/state',{cache:'no-store'}).then(function(r){return r.json()}).then(function(j){
+    setLive(true);
+    var s=JSON.stringify(j);
+    if(s!==last){last=s;ST=j;
+      var ed=document.getElementById('note');
+      if(!(ed&&ed.value))render();
+    }
+  }).catch(function(){setLive(false)});
+}
+function post(stage,action,note){
+  fetch('/api/decision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({stage:stage,action:action,note:note||''})}).then(function(){last='';poll()});
+}
+document.addEventListener('click',function(e){
+  var t=e.target.closest('[data-go],[data-tab],[data-act]');if(!t||!ST)return;
+  if(t.dataset.go!==undefined){V.sel=+t.dataset.go;V.manual=true;V.noteOpen=false;render();return}
+  if(t.dataset.tab!==undefined){V.tab[V.sel]=+t.dataset.tab;render();return}
+  var a=t.dataset.act;
+  if(a==='approve')post(V.sel,'approve');
+  else if(a==='send-back')post(V.sel,'send-back');
+  else if(a==='changes'){V.noteOpen=true;render()}
+});
+document.addEventListener('keydown',function(e){
+  if(e.target&&e.target.id==='note'&&e.key==='Enter'&&e.target.value.trim()){var n=e.target.value.trim();V.noteOpen=false;post(V.sel,'changes',n)}
+});
+poll();setInterval(poll,1500);
+
+</script>
