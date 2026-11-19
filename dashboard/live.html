@@ -64,9 +64,9 @@ input[type=text],textarea{width:100%;font:inherit;padding:8px 10px;border-radius
 .row input{flex:1}
 .foot{display:flex;gap:8px;justify-content:space-between;margin-top:18px;flex-wrap:wrap}
 .stages{list-style:none;margin:14px 0;padding:0;display:grid;gap:8px}
-.stages li{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;border:1px solid var(--line)}
+.stages li{flex-wrap:wrap;display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;border:1px solid var(--line)}
 .stages li.run{background:var(--run);color:var(--run-ink);border-color:transparent}
-.stages li.wait{background:#ffe8b0;color:#6b4300;border-color:transparent}
+.stages .hint{font-size:12px;font-weight:400;opacity:.85}
 .stages li.done{background:var(--done);color:var(--done-ink);border-color:transparent}
 .stages .n{width:24px;height:24px;border-radius:50%;background:rgba(0,0,0,.12);display:grid;place-items:center;font-size:13px;font-weight:700}
 .stages .st{margin-inline-start:auto;font-size:13px}
@@ -101,7 +101,7 @@ input[type=text],textarea{width:100%;font:inherit;padding:8px 10px;border-radius
 let S = null, lastJson = '';
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const STATE_HE = {pend:'ממתין', run:'סוכן עובד', wait:'ממתין לאישור', done:'אושר'};
+const STATE_HE = {pend:'ממתין', run:'בעבודה', done:'הסתיים'};
 
 async function api(path, body) {
   const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body||{})});
@@ -119,11 +119,10 @@ async function refresh(force) {
 
 function cellInfo(c) {
   const st = c.stages;
-  let cur = st.findIndex(s => s === 'run' || s === 'wait');
+  let cur = st.findIndex(s => s === 'run');
   if (c.status === 'todo') return {lbl:'לא התחיל', sub:''};
-  if (c.status === 'done') return {lbl:'הסתיים', sub:'כל השלבים אושרו'};
-  const name = S.stages[cur].name;
-  return {lbl:name, sub: st[cur] === 'wait' ? 'ממתין לאישור' : 'סוכן עובד'};
+  if (c.status === 'done') return {lbl:'הסתיים', sub:'נבדק קצה לקצה'};
+  return {lbl:S.stages[cur].name, sub:'בעבודה'};
 }
 
 function render() {
@@ -138,7 +137,7 @@ function render() {
       const c = S.cells[p.id + ':' + m.id];
       if (!c) { h += '<td><span class="na" title="לא משויך"></span></td>'; continue; }
       const i = cellInfo(c);
-      const pips = c.stages.map((s, k) => `<b class="${s==='done'?'on':(s==='run'||s==='wait')?'cur':''}"></b>`).join('');
+      const pips = c.stages.map((s, k) => `<b class="${s==='done'?'on':s==='run'?'cur':''}"></b>`).join('');
       h += `<td><button class="c ${c.status}" data-p="${p.id}" data-m="${m.id}"><span class="lbl">${esc(i.lbl)}</span><span class="pips">${pips}</span><span class="sub">${esc(i.sub)}</span></button></td>`;
     }
     h += '</tr>';
@@ -163,16 +162,18 @@ function renderCell() {
   const sig = JSON.stringify(c); if (sig === openSig) return; openSig = sig;
   const who = localStorage.getItem('who') || '';
   const note = $('note') ? $('note').value : '';
-  let h = `<h2>${esc(p.name)} · ${esc(m.name)}</h2><div class="muted">כל שלב מסתיים בסוכן ואז באישור ידני של בעל התפקיד. רק אחרי האישור עובר הזרם לשלב הבא.</div><ul class="stages">`;
+  let h = `<h2>${esc(p.name)} · ${esc(m.name)}</h2><div class="muted">כל שלב נסגר ידנית על ידי בעל התפקיד, ורק אז התא עובר לשלב הבא. אפשר להחזיר לשלב הקודם עם הערה.</div><ul class="stages">`;
   c.stages.forEach((s, k) => {
     let act = '';
-    if (s === 'run') act = `<button data-a="ready" data-k="${k}">סוכן סיים</button>`;
-    if (s === 'wait') act = `<button class="primary" data-a="approve" data-k="${k}">אשר סיום</button><button class="danger" data-a="reject" data-k="${k}">החזר לתיקון</button>`;
-    h += `<li class="${s}"><span class="n">${k+1}</span><b>${esc(S.stages[k].name)}</b><span class="st">${STATE_HE[s]}</span>${act}</li>`;
+    if (s === 'run') {
+      act = `<button class="primary" data-a="complete" data-k="${k}">${esc(S.stages[k].done_label)}</button>`;
+      if (k > 0) act += `<button class="danger" data-a="back" data-k="${k}">החזר ל${esc(S.stages[k-1].name)}</button>`;
+    }
+    h += `<li class="${s}"><span class="n">${k+1}</span><span><b>${esc(S.stages[k].name)}</b>${s==='run' ? `<div class="hint">${esc(S.stages[k].hint)}</div>` : ''}</span><span class="st">${STATE_HE[s]}</span>${act}</li>`;
   });
   h += '</ul>';
-  h += `<label for="who">שם המאשר</label><input type="text" id="who" value="${esc(who)}" placeholder="למשל: דנה, מנהלת מוצר">`;
-  h += `<label for="note">הערה (נדרשת בהחזרה לתיקון)</label><input type="text" id="note" value="${esc(note)}">`;
+  h += `<label for="who">שם בעל התפקיד</label><input type="text" id="who" value="${esc(who)}" placeholder="למשל: דנה, מנהלת מוצר">`;
+  h += `<label for="note">הערה (נדרשת בהחזרה לשלב הקודם)</label><input type="text" id="note" value="${esc(note)}">`;
   h += '<div class="err" id="cerr"></div>';
   h += '<ul class="log">' + c.log.slice(0, 12).map(l => `<li>${new Date(l.ts*1000).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'})} · ${esc(l.m)}</li>`).join('') + '</ul>';
   h += '<div class="foot"><span>';
@@ -186,7 +187,7 @@ $('dCell').addEventListener('click', async e => {
   const b = e.target.closest('[data-a]'); if (!b) return;
   const who = $('who').value.trim(), note = $('note').value.trim();
   localStorage.setItem('who', who);
-  if (b.dataset.a === 'reject' && !note) { $('cerr').textContent = 'יש לכתוב הערה להחזרה לתיקון'; return; }
+  if (b.dataset.a === 'back' && !note) { $('cerr').textContent = 'יש לכתוב הערה להחזרה לשלב הקודם'; return; }
   try {
     await api('/api/cell', {project:openKey[0], module:openKey[1], action:b.dataset.a, stage:+(b.dataset.k||0), who, note});
     if ($('note')) $('note').value = '';

@@ -2,9 +2,10 @@
 
 Usage: python server.py [--port 8765] [--host 0.0.0.0] [--data data.xlsx]
 
-Flow per (project, sub-module) cell: Product Manager -> AI Development -> Developer -> QA.
-Each agent finishes its work ("ready"), a human owner approves manually, and only then
-does the next stage start. All data lives in one Excel workbook (the database); the page polls /api/state.
+Flow per (project, sub-module) cell: Product -> AI Dev -> Dev -> QA -> end-to-end check.
+Every stage is closed by hand ("complete") by its owner, and only then does the next stage start.
+AI Dev runs outside the system; its owner just reports it finished. "back" sends a cell to
+the previous stage with a note. All data lives in one Excel workbook (the database); the page polls /api/state.
 Sheets: ראשי (colored status matrix), פרויקטים, תת מודולים, שיוך (project x module + stage states), יומן.
 Never reset: only a missing file is seeded. Reads/writes are serialized by a thread lock and a lock file.
 """
@@ -16,10 +17,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STAGES = [
-    {"key": "pm", "name": "מנהל מוצר"},
-    {"key": "aidev", "name": "פיתוח AI"},
-    {"key": "dev", "name": "מפתח"},
-    {"key": "qa", "name": "QA"},
+    {"key": "pm", "name": "מנהל מוצר", "done_label": "סיים איפיון",
+     "hint": "מנהל המוצר מסיים את האיפיון"},
+    {"key": "aidev", "name": "פיתוח AI", "done_label": "פיתוח ה-AI הסתיים",
+     "hint": "סוכן ה-AI Dev רץ מחוץ למערכת. עדכן כשהוא סיים"},
+    {"key": "dev", "name": "מפתח", "done_label": "הקוד נבדק ותקין",
+     "hint": "המפתח בודק שהקוד שה-AI יצר עובד ותקין"},
+    {"key": "qa", "name": "QA", "done_label": "QA אישר",
+     "hint": "בדיקות QA לתת המודול"},
+    {"key": "e2e", "name": "בדיקה קצה לקצה", "done_label": "המודול נבדק ותקין קצה לקצה",
+     "hint": "בדיקת כל השלבים של תת המודול מקצה לקצה"},
 ]
 N = len(STAGES)
 LOCK = threading.Lock()
@@ -45,8 +52,9 @@ def seed():
 
 SH_MAIN, SH_PROJECTS, SH_MODULES, SH_ASSIGN, SH_LOG = "ראשי", "פרויקטים", "תת מודולים", "שיוך", "יומן"
 LEGACY_FLOW = "זרם"  # sheet name used by an earlier version of the file
-STATE_HE = {"pend": "ממתין", "run": "סוכן עובד", "wait": "ממתין לאישור", "done": "אושר"}
+STATE_HE = {"pend": "ממתין", "run": "בעבודה", "done": "הסתיים"}
 STATE_CODE = {v: k for k, v in STATE_HE.items()}
+STATE_CODE.update({"סוכן עובד": "run", "ממתין לאישור": "run", "אושר": "done"})  # labels from older files
 STATUS_HE = {"todo": "לא התחיל", "run": "בתהליך", "done": "הסתיים"}
 FILL = {"todo": "F4B4B4", "run": "A9E6F2", "done": "A6E3BF"}
 
@@ -97,12 +105,19 @@ def load():
          "projects": [{"id": str(r[0]), "name": str(r[1]), "modules": []} for r in rows(SH_PROJECTS)],
          "cells": {}}
     byid = {p["id"]: p for p in d["projects"]}
-    # assignment row: project id, project, module id, module, <4 stage states>, status
-    for r in rows(SH_ASSIGN) or rows(LEGACY_FLOW):
+    # assignment row: project id, project, module id, module, <stage states>, status
+    sheet = SH_ASSIGN if SH_ASSIGN in wb.sheetnames else LEGACY_FLOW
+    old_n = min(N, len(next(wb[sheet].iter_rows(max_row=1, values_only=True))) - 5) if sheet in wb.sheetnames else N
+    for r in rows(sheet):
         pid, mid = str(r[0]), str(r[2])
         if pid in byid and mid not in byid[pid]["modules"]:
             byid[pid]["modules"].append(mid)
-            d["cells"][pid + ":" + mid] = {"stages": [STATE_CODE.get(r[4 + i], "pend") for i in range(N)], "log": []}
+            st = [STATE_CODE.get(r[4 + i], "pend") if i < old_n else "pend" for i in range(N)]
+            # older files had 4 stages: if everything before the first open stage is done, that stage is in progress
+            first = next((i for i, s in enumerate(st) if s != "done"), None)
+            if first is not None and first > 0 and st[first] == "pend":
+                st[first] = "run"
+            d["cells"][pid + ":" + mid] = {"stages": st, "log": []}
     for r in rows(SH_LOG):
         c = d["cells"].get(str(r[0]) + ":" + str(r[1]))
         if c is not None:
@@ -137,7 +152,7 @@ def save(d):
             if m["id"] in p["modules"]:
                 st = d["cells"].get(p["id"] + ":" + m["id"], {"stages": ["pend"] * N})["stages"]
                 status = status_of(st)
-                cur = next((i for i, s in enumerate(st) if s in ("run", "wait")), None)
+                cur = next((i for i, s in enumerate(st) if s == "run"), None)
                 row.append(STATUS_HE[status] if cur is None else "%s: %s" % (STAGES[cur]["name"], STATE_HE[st[cur]]))
                 fills.append(FILL[status])
             else:
@@ -214,27 +229,25 @@ def cell_action(d, pid, mid, action, stage, who, note):
         if any(s != "pend" for s in st):
             raise ValueError("already started")
         st[0] = "run"
-        log(c, "%sהזרם התחיל, סוכן %s עובד" % (by, STAGES[0]["name"]))
-    elif action == "ready":
+        log(c, "%sהזרם התחיל, שלב: %s" % (by, STAGES[0]["name"]))
+    elif action == "complete":
+        # the stage owner confirms by hand; the cell moves on to the next stage
         if st[stage] != "run":
-            raise ValueError("stage not running")
-        st[stage] = "wait"
-        log(c, "סוכן %s סיים, ממתין לאישור" % STAGES[stage]["name"])
-    elif action == "approve":
-        if st[stage] != "wait":
-            raise ValueError("stage not awaiting approval")
+            raise ValueError("stage is not in progress")
         st[stage] = "done"
-        log(c, "%sאישר סיום שלב %s" % (by, STAGES[stage]["name"]))
+        log(c, "%s%s" % (by, STAGES[stage]["done_label"]))
         if stage + 1 < N:
             st[stage + 1] = "run"
-            log(c, "הועבר לסוכן %s" % STAGES[stage + 1]["name"])
+            log(c, "הועבר לשלב: %s" % STAGES[stage + 1]["name"])
         else:
-            log(c, "הזרם הושלם")
-    elif action == "reject":
-        if st[stage] != "wait":
-            raise ValueError("stage not awaiting approval")
-        st[stage] = "run"
-        log(c, "%sהוחזר לסוכן %s לתיקון: %s" % (by, STAGES[stage]["name"], note))
+            log(c, "המודול נבדק ותקין קצה לקצה, הזרם הושלם")
+    elif action == "back":
+        # a stage owner found a problem: send the cell to the previous stage with a note
+        if st[stage] != "run" or stage == 0:
+            raise ValueError("cannot send back from this stage")
+        st[stage] = "pend"
+        st[stage - 1] = "run"
+        log(c, "%sהוחזר מ%s ל%s: %s" % (by, STAGES[stage]["name"], STAGES[stage - 1]["name"], note))
     elif action == "reset":
         c["stages"] = ["pend"] * N
         log(c, "%sהזרם אופס" % by)
