@@ -109,11 +109,9 @@ input[type=text],textarea{width:100%;font:inherit;padding:8px 10px;border-radius
     </div>
   </div>
   <div class="bar">
-    <div class="grp"><span class="gl">סינון</span>
-      <select id="who-filter" title="הצג את המשימות הנוכחיות של עובד"><option value="">כל העובדים</option></select>
-    </div>
     <div class="grp"><span class="gl">רשימות (הוספה, עריכה, מחיקה)</span>
-      <span class="btns"><button id="manageProjects">פרויקטים</button><button id="manageModules">תת מודולים</button><button id="manageEmps">עובדים</button></span>
+      <span class="btns"><button id="manageProjects">פרויקטים</button><button id="manageModules">תת מודולים</button>
+        <select id="who-filter" title="עובדים: בחר עובד כדי להדגיש את המשימות שממתינות לו, או בחר ניהול עובדים"><option value="">עובדים</option></select></span>
     </div>
     <div class="grp"><span class="gl">שיוך</span>
       <span class="btns"><button id="assignModules">תת מודולים לפרויקטים</button><button id="assignEmps">עובדים לפרויקטים</button></span>
@@ -172,10 +170,16 @@ function cellInfo(c) {
 
 /* employee filter in the header: dims every task that is not currently waiting on that employee */
 let filterEmail = '';
-$('who-filter').onchange = e => { filterEmail = e.target.value; render(); };
+// one "עובדים" control: pick an employee to highlight their tasks, "הצג הכול" to clear, "ניהול עובדים" to edit the list
+$('who-filter').onchange = e => {
+  if (e.target.value === '__manage') { e.target.value = filterEmail; renderEmps(); $('dEmps').showModal(); return; }
+  filterEmail = e.target.value; render();
+};
 function renderFilter() {
   const sel = $('who-filter');
-  sel.innerHTML = '<option value="">כל העובדים</option>' + S.employees.map(e => `<option value="${esc(e.name)}">${esc(e.name)} (${esc(roleName(e.role))})</option>`).join('');
+  sel.innerHTML = '<option value="">עובדים: הצג הכול</option>' +
+    S.employees.map(e => `<option value="${esc(e.name)}">${esc(e.name)} (${esc(roleName(e.role))})</option>`).join('') +
+    '<option value="__manage">ניהול עובדים…</option>';
   if (!S.employees.some(e => e.name === filterEmail)) filterEmail = '';
   sel.value = filterEmail;
 }
@@ -454,7 +458,6 @@ $('dModules').addEventListener('click', async e => {
 });
 
 /* ---------- employees ---------- */
-$('manageEmps').onclick = () => { renderEmps(); $('dEmps').showModal(); };
 const roleOptions = sel => S.roles.map(r => `<option value="${r.key}" ${r.key === sel ? 'selected' : ''}>${esc(r.name)}</option>`).join('');
 function renderEmps(err, keep) {
   let h = '<h2>עובדים</h2><div class="muted">כל משימה בזרם משויכת לעובד. העובד מזוהה לפי השם, ושינוי שם מתעדכן בכל המשימות. כמה עובדים יכולים לשתף אותה כתובת מייל. מחיקת עובד מסירה אותו מכל המשימות.</div>';
