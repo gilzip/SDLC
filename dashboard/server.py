@@ -11,8 +11,10 @@ Sheets: ראשי (colored status matrix), פרויקטים (only the project nam
 stage states + owners), עובדים, הגדרות פרויקט (end-to-end approval and role owners per project), יומן.
 Never reset: only a missing file is seeded. Reads/writes are serialized by a thread lock and a lock file.
 """
-import argparse, copy, json, os, socket, sys, threading, time, uuid
+import argparse, base64, copy, hashlib, hmac, html, json, os, secrets, smtplib, socket, ssl, sys, threading, time, urllib.parse, uuid
 from contextlib import contextmanager
+from email.message import EmailMessage
+from email.utils import formataddr
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill, Font, Alignment
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -44,6 +46,8 @@ STAGES = [
 N = len(STAGES)
 LOCK = threading.Lock()
 DATA_PATH = os.path.join(HERE, "data.xlsx")
+PORT = 8765
+EVENTS = []  # stage hand-overs collected while a change is applied; turned into e-mails after it is saved
 
 SEED_MODULES = ["קליטת מרשם", "הכנסה לסל", "חלופה גנרית", "סיום ניפוק"]
 # project -> number of modules (the first N); smaller projects get only part of the modules
@@ -386,6 +390,7 @@ def cell_action(d, pid, mid, action, stage, who, note):
             raise ValueError("already started")
         st[0] = "run"
         log(c, "%sה-Flow התחיל, שלב: %s" % (by, STAGES[0]["name"]))
+        EVENTS.append({"kind": "start", "pid": pid, "mid": mid, "stage": 0, "who": who, "note": ""})
     elif action == "complete":
         # the stage owner confirms by hand; the cell moves on to the next stage
         if st[stage] != "run":
@@ -395,6 +400,7 @@ def cell_action(d, pid, mid, action, stage, who, note):
         if stage + 1 < N:
             st[stage + 1] = "run"
             log(c, "הועבר לשלב: %s" % STAGES[stage + 1]["name"])
+            EVENTS.append({"kind": "next", "pid": pid, "mid": mid, "stage": stage + 1, "who": who, "note": ""})
         else:
             log(c, "המודול נבדק ותקין קצה לקצה, ה-Flow הושלם")
     elif action == "back":
@@ -404,6 +410,7 @@ def cell_action(d, pid, mid, action, stage, who, note):
         st[stage] = "pend"
         st[stage - 1] = "run"
         log(c, "%sהוחזר מ%s ל%s: %s" % (by, STAGES[stage]["name"], STAGES[stage - 1]["name"], note))
+        EVENTS.append({"kind": "back", "pid": pid, "mid": mid, "stage": stage - 1, "who": who, "note": note})
     elif action == "reopen":
         # the project-level end-to-end check found a problem in this sub-module: reopen it at a stage
         if status_of(st) != "done":
@@ -411,6 +418,7 @@ def cell_action(d, pid, mid, action, stage, who, note):
         for i in range(stage, N):
             st[i] = "run" if i == stage else "pend"
         log(c, "%sנפתח מחדש בשלב %s: %s" % (by, STAGES[stage]["name"], note))
+        EVENTS.append({"kind": "reopen", "pid": pid, "mid": mid, "stage": stage, "who": who, "note": note})
     elif action == "reset":
         c["stages"] = ["pend"] * N
         log(c, "%sה-Flow אופס" % by)
@@ -512,8 +520,12 @@ def handle(d, path, body):
         c["owners"][stage] = employee_of(d, body.get("employee", ""))
         log(c, "אחראי לשלב %s: %s" % (STAGES[stage]["name"], c["owners"][stage] or "ללא אחראי"))
     elif path == "/api/cell":
+        proj = find_project(d, body["project"])
+        before = project_e2e(d, proj)[0]
         cell_action(d, body["project"], body["module"], str(body["action"]), int(body.get("stage", 0)),
                     str(body.get("who", ""))[:60], str(body.get("note", ""))[:500])
+        if before != "run" and project_e2e(d, proj)[0] == "run":  # the last sub-module just finished
+            EVENTS.append({"kind": "project", "pid": proj["id"], "mid": "", "stage": -1, "who": str(body.get("who", ""))[:60], "note": ""})
     elif path == "/api/project/e2e":
         # manual approval that the whole project works end to end across all its sub-modules
         p = find_project(d, body["id"])
@@ -525,6 +537,283 @@ def handle(d, path, body):
     else:
         raise KeyError(path)
     normalize(d)
+
+
+
+# ---------------------------------------------------------------------------------------------
+# Notification e-mails with a signed approve link. Settings: dashboard/mail.json (see mail.example.json)
+# or FLOW_SMTP_* / FLOW_BASE_URL environment variables. Without SMTP settings the mails are written to
+# the "outbox" folder next to the workbook instead of being sent.
+# ---------------------------------------------------------------------------------------------
+def data_dir():
+    return os.path.dirname(DATA_PATH)
+
+
+def mail_config():
+    cfg = {}
+    try:
+        with open(os.path.join(data_dir(), "mail.json"), encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        pass
+    for key, env in [("host", "FLOW_SMTP_HOST"), ("port", "FLOW_SMTP_PORT"), ("user", "FLOW_SMTP_USER"),
+                     ("password", "FLOW_SMTP_PASSWORD"), ("from", "FLOW_SMTP_FROM"),
+                     ("security", "FLOW_SMTP_SECURITY"), ("base_url", "FLOW_BASE_URL")]:
+        if os.environ.get(env):
+            cfg[key] = os.environ[env]
+    return cfg
+
+
+def secret():
+    path = os.path.join(data_dir(), ".flow-secret")
+    try:
+        with open(path, encoding="ascii") as f:
+            return f.read().strip().encode()
+    except OSError:
+        key = secrets.token_hex(32)
+        with open(path, "w", encoding="ascii") as f:
+            f.write(key)
+        return key.encode()
+
+
+def make_token(kind, pid, mid, stage):
+    payload = "|".join([kind, pid, mid or "-", str(stage)]).encode("utf-8")
+    sig = hmac.new(secret(), payload, hashlib.sha256).hexdigest()[:40]
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=") + "." + sig
+
+
+def read_token(tok):
+    """Returns (kind, pid, mid, stage) for a genuine token, otherwise None."""
+    try:
+        raw, sig = tok.rsplit(".", 1)
+        payload = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
+        good = hmac.new(secret(), payload, hashlib.sha256).hexdigest()[:40]
+        if not hmac.compare_digest(sig, good):
+            return None
+        kind, pid, mid, stage = payload.decode("utf-8").split("|")
+        return kind, pid, ("" if mid == "-" else mid), int(stage)
+    except Exception:
+        return None
+
+
+def base_url():
+    return (mail_config().get("base_url") or "http://localhost:%d" % PORT).rstrip("/")
+
+
+def approve_link(kind, pid, mid, stage):
+    return "%s/approve?t=%s" % (base_url(), urllib.parse.quote(make_token(kind, pid, mid, stage)))
+
+
+def prepare_mails(d, events):
+    """Turns hand-over events into mails while the workbook data is at hand. Returns a list of dicts."""
+    items = []
+    emp = {e["name"]: e for e in d["employees"]}
+    for ev in events:
+        p = next((x for x in d["projects"] if x["id"] == ev["pid"]), None)
+        if p is None:
+            continue
+        item = {"pid": p["id"], "mid": ev["mid"], "stage": ev["stage"], "kind": ev["kind"], "to": None, "skip": ""}
+        if ev["kind"] == "project":
+            owner = p.get("owners", {}).get("qa", "")
+            what = "בדיקה קצה לקצה לפרויקט"
+            title = "%s: %s" % (p["name"], what)
+            intro = "כל תתי המודולים של הפרויקט %s סיימו את כל השלבים. נדרשת עכשיו בדיקה קצה לקצה של הפרויקט כולו, ואישור שהכול עובד ותקין." % p["name"]
+            button = "אשר: הפרויקט נבדק ותקין קצה לקצה"
+            link = approve_link("P", p["id"], "", -1)
+            rows = [("פרויקט", p["name"]), ("משימה", what)]
+            subject = "[Flow] %s ממתינה לך" % title
+        else:
+            mod = next((m["name"] for m in d["modules"] if m["id"] == ev["mid"]), "")
+            c = d["cells"].get(p["id"] + ":" + ev["mid"], {})
+            owners = c.get("owners") or default_owners(p)
+            owner = owners[ev["stage"]]
+            stg = STAGES[ev["stage"]]
+            if ev["kind"] == "start":
+                intro = "נפתח Flow חדש לתת המודול, ושלב %s שייך לך." % stg["name"]
+            elif ev["kind"] == "next":
+                intro = "שלב %s הסתיים (%s). התור שלך: %s." % (STAGES[ev["stage"] - 1]["name"], ev["who"] or "בעל התפקיד הקודם", stg["name"])
+            elif ev["kind"] == "back":
+                intro = "המשימה הוחזרה אליך לשלב %s מהשלב %s. הערה: %s" % (stg["name"], STAGES[ev["stage"] + 1]["name"], ev["note"])
+            else:
+                intro = "תת המודול נפתח מחדש בשלב %s. הערה: %s" % (stg["name"], ev["note"])
+            button = "אשר: סיום שלב " + stg["name"]
+            link = approve_link("S", p["id"], ev["mid"], ev["stage"])
+            rows = [("פרויקט", p["name"]), ("תת מודול", mod), ("שלב", stg["name"]), ("תפקיד", ROLE_HE[stg["role"]])]
+            subject = "[Flow] %s / %s: ממתין לך שלב %s" % (p["name"], mod, stg["name"])
+        item["owner"] = owner
+        e = emp.get(owner)
+        if not owner:
+            item["skip"] = "אין אחראי לשלב, לא נשלח מייל"
+        elif not e or not e.get("email"):
+            item["skip"] = "לעובד %s אין כתובת מייל, לא נשלח מייל" % owner
+        else:
+            item["to"] = (owner, e["email"])
+            trs = "".join('<tr><td style="padding:4px 14px 4px 0;color:#5a6978">%s</td><td style="padding:4px 0"><b>%s</b></td></tr>' % (html.escape(k), html.escape(v)) for k, v in rows)
+            item["subject"] = subject
+            item["text"] = "שלום %s,\n\n%s\n\n%s\n%s\n\n%s\n%s\n\nהקישור פותח דף אישור. אחרי הלחיצה על \"אשר\" המערכת מתעדכנת אוטומטית והמשימה עוברת לשלב הבא.\nלדשבורד: %s\n" % (
+                owner, intro, "\n".join("%s: %s" % r for r in rows), "", button, link, base_url())
+            item["html"] = (
+                '<div dir="rtl" style="font-family:Segoe UI,Arial,sans-serif;font-size:15px;color:#14202b;max-width:560px">'
+                '<p>שלום %s,</p><p>%s</p><table style="border-collapse:collapse">%s</table>'
+                '<p style="margin:22px 0"><a href="%s" style="background:#2556d9;color:#fff;text-decoration:none;padding:11px 18px;border-radius:8px;font-weight:600">%s</a></p>'
+                '<p style="color:#5a6978;font-size:13px">הקישור פותח דף אישור. אחרי הלחיצה על "אשר" המערכת מתעדכנת אוטומטית והמשימה עוברת לשלב הבא.<br>'
+                '<a href="%s">פתח את הדשבורד</a></p></div>') % (html.escape(owner), html.escape(intro), trs, html.escape(link, quote=True), html.escape(button), html.escape(base_url(), quote=True))
+        items.append(item)
+    return items
+
+
+def send_mail(item, cfg):
+    """Sends through SMTP, or writes an .eml file into the outbox when SMTP is not configured. Returns a status text."""
+    msg = EmailMessage()
+    sender = cfg.get("from") or cfg.get("user") or "flow-desk@localhost"
+    msg["From"] = formataddr(("Flow Desk", sender))
+    msg["To"] = formataddr(item["to"])
+    msg["Subject"] = item["subject"]
+    msg.set_content(item["text"])
+    msg.add_alternative(item["html"], subtype="html")
+    if cfg.get("host"):
+        port = int(cfg.get("port") or 587)
+        security = (cfg.get("security") or ("ssl" if port == 465 else "starttls" if port == 587 else "none")).lower()
+        if security == "ssl":
+            smtp = smtplib.SMTP_SSL(cfg["host"], port, timeout=20, context=ssl.create_default_context())
+        else:
+            smtp = smtplib.SMTP(cfg["host"], port, timeout=20)
+        with smtp:
+            if security == "starttls":
+                smtp.starttls(context=ssl.create_default_context())
+            if cfg.get("user"):
+                smtp.login(cfg["user"], cfg.get("password") or "")
+            smtp.send_message(msg)
+        return "נשלח מייל ל%s (%s)" % item["to"]
+    out = os.path.join(data_dir(), "outbox")
+    os.makedirs(out, exist_ok=True)
+    name = "%d-%s.eml" % (time.time() * 1000, uuid.uuid4().hex[:6])
+    with open(os.path.join(out, name), "wb") as f:
+        f.write(bytes(msg))
+    return "מייל ל%s נשמר בתיבת היוצאים (SMTP לא מוגדר)" % item["to"][0]
+
+
+def record_mail(item, text):
+    """Writes the outcome of a send to the log of the task (or the project), so it shows in the dashboard."""
+    with LOCK, file_lock():
+        d = load()
+        if item["kind"] == "project":
+            p = next((x for x in d["projects"] if x["id"] == item["pid"]), None)
+            if p is not None:
+                p.setdefault("plog", []).insert(0, {"ts": now(), "m": text})
+        elif item["pid"] + ":" + item["mid"] in d["cells"]:
+            log(d["cells"][item["pid"] + ":" + item["mid"]], text)
+        else:
+            return
+        save(d)
+
+
+def deliver(items):
+    cfg = mail_config()
+    for item in items:
+        try:
+            text = item["skip"] or send_mail(item, cfg)
+        except Exception as e:  # a mail problem must never block the flow
+            text = "שליחת מייל נכשלה: %s" % e
+            print("mail error:", e, flush=True)
+        try:
+            record_mail(item, text)
+        except Exception as e:
+            print("mail log error:", e, flush=True)
+
+
+def mutate(fn):
+    """Applies a change under the locks, saves it, and sends the mails the change caused."""
+    with LOCK, file_lock():
+        d = load()
+        EVENTS.clear()
+        result = fn(d)
+        save(d)
+        items = prepare_mails(d, list(EVENTS))
+        EVENTS.clear()
+    if items:
+        threading.Thread(target=deliver, args=(items,), daemon=True).start()
+    return result
+
+
+PAGE = ('<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>אישור שלב</title><style>body{font-family:Segoe UI,Arial,sans-serif;background:#f3f6f9;color:#14202b;margin:0;padding:24px}'
+        '.card{max-width:520px;margin:40px auto;background:#fff;border:1px solid #d6dee6;border-radius:14px;padding:26px}'
+        'h1{font-size:20px;margin:0 0 12px}table{border-collapse:collapse;margin:14px 0}td{padding:4px 14px 4px 0}'
+        'button{font:inherit;background:#2556d9;color:#fff;border:0;border-radius:8px;padding:11px 20px;font-weight:600;cursor:pointer}'
+        '.ok{color:#17794a}.bad{color:#a62b2b}.muted{color:#5a6978;font-size:14px}a{color:#2556d9}</style></head><body><div class="card">%s</div></body></html>')
+
+
+def page(inner):
+    return PAGE % inner
+
+
+def task_info(d, kind, pid, mid, stage):
+    """Describes what a link would approve, or None when the task no longer exists."""
+    p = next((x for x in d["projects"] if x["id"] == pid), None)
+    if p is None:
+        return None
+    if kind == "P":
+        status = project_e2e(d, p)[0]
+        owner = p.get("owners", {}).get("qa", "")
+        return {"title": "בדיקה קצה לקצה לפרויקט", "rows": [("פרויקט", p["name"])], "ready": status == "run", "owner": owner,
+                "state": {"done": "הפרויקט כבר אושר", "run": "", "todo": "עדיין לא כל תתי המודולים הסתיימו", "na": ""}[status],
+                "label": "הפרויקט נבדק ותקין קצה לקצה"}
+    if mid not in p["modules"] or not 0 <= stage < N:
+        return None
+    c = d["cells"].get(pid + ":" + mid, {"stages": ["pend"] * N})
+    st = c["stages"][stage]
+    mod = next((m["name"] for m in d["modules"] if m["id"] == mid), "")
+    owners = c.get("owners") or default_owners(p)
+    return {"title": "שלב %s" % STAGES[stage]["name"], "rows": [("פרויקט", p["name"]), ("תת מודול", mod), ("שלב", STAGES[stage]["name"])],
+            "ready": st == "run", "owner": owners[stage],
+            "state": {"done": "השלב כבר אושר", "pend": "השלב עדיין לא הגיע אליך, או שהוחזר לשלב קודם", "run": ""}[st],
+            "label": "סיום שלב " + STAGES[stage]["name"]}
+
+
+def approve_get(tok):
+    t = read_token(tok)
+    if not t:
+        return 400, page('<h1 class="bad">הקישור אינו תקין</h1><p class="muted">ייתכן שהוא נחתך בהעתקה. פתח את המייל והקלק על הכפתור שוב.</p>')
+    with LOCK, file_lock():
+        info = task_info(load(), *t)
+    if info is None:
+        return 404, page('<h1 class="bad">המשימה לא נמצאה</h1><p class="muted">ייתכן שהפרויקט או תת המודול נמחקו.</p>')
+    rows = "".join("<tr><td class=muted>%s</td><td><b>%s</b></td></tr>" % (html.escape(a), html.escape(b)) for a, b in info["rows"])
+    head = "<h1>%s</h1><table>%s</table>" % (html.escape(info["title"]), rows)
+    if not info["ready"]:
+        return 200, page(head + '<p class="ok"><b>%s</b></p><p class="muted">אין מה לאשר כרגע.</p><p><a href="%s">פתח את הדשבורד</a></p>' % (html.escape(info["state"] or "אין מה לאשר כרגע"), html.escape(base_url(), quote=True)))
+    who = "<p class=muted>האישור יירשם על שם %s.</p>" % html.escape(info["owner"]) if info["owner"] else ""
+    form = ('<form method="post" action="/approve"><input type="hidden" name="t" value="%s"><button type="submit">אשר: %s</button></form>%s'
+            '<p class="muted">לחיצה תעדכן את המערכת ותעביר את המשימה לשלב הבא.</p>') % (html.escape(tok, quote=True), html.escape(info["label"]), who)
+    return 200, page(head + form)
+
+
+def approve_post(tok):
+    t = read_token(tok)
+    if not t:
+        return 400, page('<h1 class="bad">הקישור אינו תקין</h1>')
+    kind, pid, mid, stage = t
+    result = {}
+
+    def apply(d):
+        info = task_info(d, kind, pid, mid, stage)
+        if info is None:
+            result["code"], result["html"] = 404, '<h1 class="bad">המשימה לא נמצאה</h1>'
+            return
+        if not info["ready"]:
+            result["code"], result["html"] = 200, '<h1 class="ok">%s</h1><p class="muted">לא בוצע שינוי.</p>' % html.escape(info["state"] or "אין מה לאשר כרגע")
+            return
+        who = (info["owner"] + " (דרך המייל)") if info["owner"] else "דרך המייל"
+        if kind == "P":
+            handle(d, "/api/project/e2e", {"id": pid, "who": who})
+        else:
+            handle(d, "/api/cell", {"project": pid, "module": mid, "action": "complete", "stage": stage, "who": who})
+        result["code"] = 200
+        result["html"] = '<h1 class="ok">האישור נקלט</h1><p>%s אושר. המערכת עודכנה והמשימה עברה לשלב הבא.</p>' % html.escape(info["label"])
+
+    mutate(apply)
+    return result["code"], page(result["html"] + '<p><a href="%s">פתח את הדשבורד</a></p>' % html.escape(base_url(), quote=True))
 
 
 class FlowServer(ThreadingHTTPServer):
@@ -564,6 +853,13 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html"):
             with open(os.path.join(HERE, "live.html"), "rb") as f:
                 self.send(200, f.read(), "text/html; charset=utf-8")
+        elif path == "/approve":
+            q = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            try:
+                code, body = approve_get((q.get("t") or [""])[0])
+            except PermissionError:
+                code, body = 409, page('<h1 class="bad">קובץ האקסל פתוח ונעול</h1><p class="muted">סגור אותו ונסה שוב.</p>')
+            self.send(code, body, "text/html; charset=utf-8")
         elif path == "/api/state":
             try:
                 with LOCK, file_lock():
@@ -575,13 +871,19 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split("?")[0]
+        if path == "/approve":  # the form on the approve page
+            n = int(self.headers.get("Content-Length") or 0)
+            form = urllib.parse.parse_qs(self.rfile.read(n).decode("utf-8", "replace"))
+            try:
+                code, body = approve_post((form.get("t") or [""])[0])
+            except PermissionError:
+                code, body = 409, page('<h1 class="bad">קובץ האקסל פתוח ונעול</h1><p class="muted">סגור אותו ונסה שוב.</p>')
+            self.send(code, body, "text/html; charset=utf-8")
+            return
         try:
             n = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(n) or b"{}")
-            with LOCK, file_lock():
-                d = load()
-                handle(d, path, body)
-                save(d)
+            mutate(lambda d: handle(d, path, body))
             self.send(200, "{}")
         except KeyError:
             self.send(400, json.dumps({"error": "bad request"}))
@@ -598,6 +900,7 @@ if __name__ == "__main__":
     ap.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to let other users on the network connect")
     a = ap.parse_args()
     DATA_PATH = os.path.abspath(a.data)
+    PORT = a.port
     srv = FlowServer((a.host, a.port), Handler)
     # "localhost" resolves to ::1 first on Windows; with an IPv4-only socket every request then waits ~2s
     # before falling back. Listen on the IPv6 twin as well so http://localhost:PORT is instant.

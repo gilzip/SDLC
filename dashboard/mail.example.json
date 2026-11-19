@@ -1,0 +1,8 @@
+{
+  "host": "smtp.example.com",
+  "port": 587,
+  "security": "starttls",
+  "user": "flow@example.com",
+  "from": "flow@example.com",
+  "base_url": "http://localhost:8765"
+}

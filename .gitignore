@@ -7,3 +7,6 @@ demo-video/*.webm
 demo-video/source/rec/
 demo-video/source/demo-data.xlsx*
 demo-video/source/server.log
+dashboard/mail.json
+dashboard/.flow-secret
+dashboard/outbox/
