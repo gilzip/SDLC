@@ -189,6 +189,14 @@ try:
     [t.join() for t in ts]
     check("racing approvals: exactly one wins", sorted(r2) == [200, 400, 400, 400, 400], r2)
 
+    # ---- a burst of simultaneous users must not get connections refused (listen backlog)
+    burst = []
+    one = state()["projects"][0]
+    ts = [threading.Thread(target=lambda: burst.append(post("/api/project", {"name": "burst"})[0])) for _ in range(40)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    check("40 simultaneous requests all answered", burst.count(200) == 40, sorted(set(burst)))
+
     # ---- workbook held open exclusively (like Excel does): clear 409 on read and write, no data loss
     if os.name == "nt":
         import ctypes
@@ -204,9 +212,9 @@ try:
         finally:
             k.CloseHandle(ctypes.c_void_p(h))
         check("write while workbook is open gives 409 with a message", wcode == 409 and wbody.get("error"), (wcode, wbody))
-        check("read while workbook is open gives 409, not a dropped connection", rcode == 409, rcode)
+        check("read while workbook is open still answers (cached state, no dropped connection)", rcode in (200, 409), rcode)
         check("server recovers once the workbook is released", state() and post("/api/project", {"name": "אחרי שחרור"})[0] == 200)
-    check("no data lost after the locked attempt", len(state()["projects"]) >= base + 15)
+    check("no data lost after the locked attempt", len(state()["projects"]) >= base + 15 + 40)
     check("no stray lock or tmp files", not [f for f in os.listdir(TMP) if f.endswith((".lock", ".tmp"))], os.listdir(TMP))
 finally:
     stop(srv)

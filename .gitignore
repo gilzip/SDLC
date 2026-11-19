@@ -2,3 +2,8 @@ dashboard/data.xlsx
 dashboard/data.xlsx.lock
 dashboard/data.xlsx.tmp
 ~$*.xlsx
+demo-video/*.mp4
+demo-video/*.webm
+demo-video/source/rec/
+demo-video/source/demo-data.xlsx*
+demo-video/source/server.log

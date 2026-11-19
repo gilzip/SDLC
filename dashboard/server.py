@@ -11,7 +11,7 @@ Sheets: ראשי (colored status matrix), פרויקטים, עובדים, תת �
 stage states + owners), יומן.
 Never reset: only a missing file is seeded. Reads/writes are serialized by a thread lock and a lock file.
 """
-import argparse, json, os, threading, time, uuid
+import argparse, copy, json, os, socket, sys, threading, time, uuid
 from contextlib import contextmanager
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill, Font, Alignment
@@ -51,6 +51,11 @@ SEED_PROJECTS = [
     ("ירפא", 4), ("פורמידבל", 4), ("כללית", 4), ("מאוחדת", 3), ("לאומית", 3),
     ("יקר", 2), ("משרד הבטחון", 2), ("צה\"ל", 2), ("ממשק לרובוט", 1),
 ]
+
+
+def now():
+    """Timestamps are rounded to milliseconds so they survive the trip through Excel exactly."""
+    return round(time.time(), 3)
 
 
 def uid():
@@ -140,11 +145,28 @@ def normalize(d):
     for p in d["projects"]:
         if p.get("e2e") and project_e2e(d, p)[0] == "todo":
             p["e2e"] = False
-            p.setdefault("plog", []).insert(0, {"ts": time.time(), "m": "אישור הבדיקה קצה לקצה בוטל: תת מודול נפתח מחדש או נוסף"})
+            p.setdefault("plog", []).insert(0, {"ts": now(), "m": "אישור הבדיקה קצה לקצה בוטל: תת מודול נפתח מחדש או נוסף"})
+
+
+_CACHE = {"key": None, "data": None}
+
+
+def file_key():
+    """Identity of the workbook on disk. A change made by anyone (another server process, a person in Excel)
+    changes it, which invalidates the cache."""
+    try:
+        st = os.stat(DATA_PATH)
+        return (DATA_PATH, st.st_mtime_ns, st.st_size)
+    except FileNotFoundError:
+        return None
 
 
 def load():
-    """Reads the workbook. Only a missing file is seeded; any other failure raises, never resets data."""
+    """Reads the workbook. Only a missing file is seeded; any other failure raises, never resets data.
+    Parsing is skipped when the file is unchanged since we last read or wrote it (polling is frequent)."""
+    key = file_key()
+    if key is not None and key == _CACHE["key"]:
+        return copy.deepcopy(_CACHE["data"])
     try:
         wb = load_workbook(DATA_PATH)
     except FileNotFoundError:
@@ -206,6 +228,7 @@ def load():
         c = d["cells"].get(str(r[0]) + ":" + str(r[1]))
         if c is not None:
             c["log"].append(entry)
+    _CACHE["key"], _CACHE["data"] = key, copy.deepcopy(d)
     return d
 
 
@@ -294,6 +317,7 @@ def save(d):
     try:
         wb.save(tmp)
         os.replace(tmp, DATA_PATH)
+        _CACHE["key"], _CACHE["data"] = file_key(), copy.deepcopy(d)
     except OSError:
         if os.path.exists(tmp):
             os.remove(tmp)
@@ -312,7 +336,7 @@ def cell(d, pid, mid):
 
 
 def log(c, msg):
-    c["log"].insert(0, {"ts": time.time(), "m": msg})
+    c["log"].insert(0, {"ts": now(), "m": msg})
     c["log"] = c["log"][:40]
 
 
@@ -482,11 +506,30 @@ def handle(d, path, body):
         if project_e2e(d, p)[0] != "run":
             raise ValueError("all sub-modules must be finished first")
         who = str(body.get("who", ""))[:60]
-        p["e2e"], p["e2e_by"], p["e2e_ts"] = True, who, time.time()
-        p.setdefault("plog", []).insert(0, {"ts": time.time(), "m": "%sהפרויקט נבדק ותקין קצה לקצה, מאושר להעלאה לפרודקשיין" % ((who + " — ") if who else "")})
+        p["e2e"], p["e2e_by"], p["e2e_ts"] = True, who, now()
+        p.setdefault("plog", []).insert(0, {"ts": now(), "m": "%sהפרויקט נבדק ותקין קצה לקצה, מאושר להעלאה לפרודקשיין" % ((who + " — ") if who else "")})
     else:
         raise KeyError(path)
     normalize(d)
+
+
+class FlowServer(ThreadingHTTPServer):
+    # the default backlog is 5: a burst of simultaneous users on Windows would get connections refused
+    request_queue_size = 128
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], ConnectionError):
+            return  # the client went away mid-response; nothing to report
+        super().handle_error(request, client_address)
+
+
+class V6Server(FlowServer):
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)  # IPv6 only, IPv4 has its own socket
+        super().server_bind()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -541,6 +584,14 @@ if __name__ == "__main__":
     ap.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to let other users on the network connect")
     a = ap.parse_args()
     DATA_PATH = os.path.abspath(a.data)
-    srv = ThreadingHTTPServer((a.host, a.port), Handler)
+    srv = FlowServer((a.host, a.port), Handler)
+    # "localhost" resolves to ::1 first on Windows; with an IPv4-only socket every request then waits ~2s
+    # before falling back. Listen on the IPv6 twin as well so http://localhost:PORT is instant.
+    twin = {"127.0.0.1": "::1", "0.0.0.0": "::"}.get(a.host)
+    if twin:
+        try:
+            threading.Thread(target=V6Server((twin, a.port), Handler).serve_forever, daemon=True).start()
+        except OSError:
+            pass  # no IPv6 on this machine
     print("SDLC flow desk on http://localhost:%d" % a.port, flush=True)
     srv.serve_forever()
