@@ -64,6 +64,14 @@ td.e2ec{padding-inline-start:6px;border-inline-start:2px solid var(--line)}
 dialog{border:1px solid var(--line);border-radius:14px;background:var(--surface);color:var(--ink);padding:20px;width:min(520px,94vw)}
 dialog::backdrop{background:rgba(0,0,0,.4)}
 #dEmps{width:min(780px,96vw)}
+#dAssignM,#dAssignE{width:min(980px,96vw)}
+.scroll{overflow:auto;max-height:55vh;margin-top:12px}
+table.grid{border-collapse:collapse;width:100%}
+table.grid th,table.grid td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:center;font-size:14px;font-weight:500}
+table.grid thead th{position:sticky;top:0;background:var(--surface)}
+table.grid tbody th{text-align:start;white-space:nowrap}
+table.grid select{font:inherit;font-size:13px;padding:4px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--ink);max-width:130px}
+table.grid input[type=checkbox]{width:18px;height:18px}
 .row.emp input{min-width:0}
 dialog h2{margin:0 0 4px;font-size:18px}
 .muted{color:var(--muted);font-size:13px}
@@ -101,6 +109,8 @@ input[type=text],textarea{width:100%;font:inherit;padding:8px 10px;border-radius
     <button class="primary" id="addProject">+ פרויקט</button>
     <button id="manageModules">תת מודולים</button>
     <button id="manageEmps">עובדים</button>
+    <button id="assignModules">שיוך תת מודולים</button>
+    <button id="assignEmps">שיוך עובדים</button>
   </div>
 </header>
 <div id="banner" class="banner" role="alert" hidden></div>
@@ -111,6 +121,8 @@ input[type=text],textarea{width:100%;font:inherit;padding:8px 10px;border-radius
 <dialog id="dProject"></dialog>
 <dialog id="dModules"></dialog>
 <dialog id="dEmps"></dialog>
+<dialog id="dAssignM"></dialog>
+<dialog id="dAssignE"></dialog>
 
 <script>
 let S = null, lastJson = '';
@@ -297,22 +309,13 @@ $('dE2E').addEventListener('click', async e => {
 });
 $('dE2E').addEventListener('close', () => { e2eId = null; });
 
-/* ---------- project add / edit ---------- */
+/* ---------- project add / edit: the project itself is only a name ---------- */
 $('addProject').onclick = () => openProject(null);
 function openProject(pid) {
-  const p = pid ? S.projects.find(x => x.id === pid) : {name:'', modules:[], owners:{}};
+  const p = pid ? S.projects.find(x => x.id === pid) : {name:''};
   let h = `<h2>${pid ? 'עריכת פרויקט' : 'פרויקט חדש'}</h2>`;
   h += `<label for="pn">שם הפרויקט</label><input type="text" id="pn" value="${esc(p.name)}">`;
-  h += '<label>אחראים לפרויקט (לפי תפקיד)</label>';
-  for (const r of S.roles) {
-    const list = S.employees.filter(e => e.role === r.key).concat(S.employees.filter(e => e.role !== r.key));
-    h += `<div class="row"><span style="min-width:90px">${esc(r.name)}</span><select data-role="${r.key}" data-orig="${esc(p.owners[r.key] || '')}" style="flex:1;font:inherit;padding:6px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)"><option value="">ללא</option>${list.map(e => `<option value="${esc(e.name)}" ${e.name === p.owners[r.key] ? 'selected' : ''}>${esc(e.name)}${e.role !== r.key ? ' (' + esc(roleName(e.role)) + ')' : ''}</option>`).join('')}</select></div>`;
-  }
-  h += '<div class="muted">שינוי אחראי כאן מחליף את האחראי בכל המשימות של הפרויקט. אפשר לשנות משימה בודדת בחלון התא.</div>';
-  h += '<label>תת מודולים משויכים</label>';
-  if (!S.modules.length) h += '<div class="muted">אין תת מודולים. הוסף דרך "תת מודולים".</div>';
-  for (const m of S.modules) h += `<label class="chk"><input type="checkbox" value="${m.id}" ${p.modules.includes(m.id)?'checked':''}> ${esc(m.name)}</label>`;
-  if (pid) h += '<div class="muted">הסרת שיוך מוחקת את מצב הזרם של אותו תא.</div>';
+  h += '<div class="muted" style="margin-top:10px">תתי המודולים והעובדים של הפרויקט משויכים במסכים "שיוך תת מודולים" ו"שיוך עובדים".</div>';
   h += '<div class="err" id="perr"></div><div class="foot"><span>';
   if (pid) h += '<button class="danger" id="pdel">מחק פרויקט</button>';
   h += '</span><span><button data-close>ביטול</button> <button class="primary" id="psave">שמור</button></span></div>';
@@ -324,18 +327,7 @@ $('dProject').addEventListener('click', async e => {
     if (e.target.closest('[data-close]')) return d.close();
     if (e.target.id === 'psave') {
       const name = $('pn').value.trim(); if (!name) { $('perr').textContent = 'יש להזין שם'; return; }
-      const mods = [...d.querySelectorAll('input[type=checkbox]:checked')].map(x => x.value);
-      // owners are sent only for roles the user changed, so a rename never overwrites per-task assignments
-      const owners = {};
-      d.querySelectorAll('select[data-role]').forEach(s => { if (s.value !== s.dataset.orig) owners[s.dataset.role] = s.value; });
-      const body = {name, modules:mods};
-      if (Object.keys(owners).length) body.owners = owners;
-      if (pid) await api('/api/project/update', {id:pid, ...body});
-      else {
-        await api('/api/project', {name});
-        const created = S.projects[S.projects.length - 1];
-        if (mods.length || body.owners) await api('/api/project/update', {id:created.id, ...body});
-      }
+      if (pid) await api('/api/project/update', {id:pid, name}); else await api('/api/project', {name});
       d.close();
     }
     if (e.target.id === 'pdel') {
@@ -343,6 +335,69 @@ $('dProject').addEventListener('click', async e => {
       await api('/api/project/delete', {id:pid}); d.close();
     }
   } catch (er) { $('perr').textContent = er.message; }
+});
+
+/* ---------- assignment screens: sub-modules to projects, employees to projects ---------- */
+$('assignModules').onclick = () => { renderAssignModules(); $('dAssignM').showModal(); };
+function renderAssignModules(err) {
+  let h = '<h2>שיוך תת מודולים לפרויקטים</h2><div class="muted">סמן אילו תתי מודולים שייכים לכל פרויקט. אפשר לשייך לפרויקט רק חלק מהם. הסרת שיוך מוחקת את מצב הזרם של אותו תא.</div>';
+  h += '<div class="scroll"><table class="grid"><thead><tr><th></th>' + S.modules.map(m => `<th>${esc(m.name)}</th>`).join('') + '</tr></thead><tbody>';
+  for (const p of S.projects)
+    h += `<tr data-p="${p.id}"><th>${esc(p.name)}</th>` + S.modules.map(m => `<td><input type="checkbox" data-m="${m.id}" data-orig="${p.modules.includes(m.id) ? 1 : 0}" ${p.modules.includes(m.id) ? 'checked' : ''} aria-label="${esc(p.name)} / ${esc(m.name)}"></td>`).join('') + '</tr>';
+  h += '</tbody></table></div>';
+  if (!S.modules.length) h += '<div class="muted">אין תתי מודולים. הוסף דרך "תת מודולים".</div>';
+  h += `<div class="err" id="amerr">${esc(err || '')}</div><div class="foot"><span></span><span><button data-close>סגור</button> <button class="primary" id="amsave">שמור שיוך</button></span></div>`;
+  $('dAssignM').innerHTML = h;
+}
+$('dAssignM').addEventListener('click', async e => {
+  const d = $('dAssignM');
+  try {
+    if (e.target.closest('[data-close]')) return d.close();
+    if (e.target.id === 'amsave') {
+      const changed = [];
+      d.querySelectorAll('tbody tr').forEach(tr => {
+        const boxes = [...tr.querySelectorAll('input[type=checkbox]')];
+        if (boxes.some(b => (b.checked ? 1 : 0) !== +b.dataset.orig)) changed.push({id:tr.dataset.p, modules:boxes.filter(b => b.checked).map(b => b.dataset.m), removed:boxes.filter(b => !b.checked && +b.dataset.orig).length});
+      });
+      const removed = changed.reduce((n, c) => n + c.removed, 0);
+      if (removed && e.target.dataset.sure !== '1') { e.target.dataset.sure = '1'; e.target.textContent = `יימחקו ${removed} תאים. לחץ שוב לאישור`; return; }
+      for (const c of changed) await api('/api/project/update', {id:c.id, modules:c.modules});
+      d.close();
+    }
+  } catch (er) { renderAssignModules(er.message); }
+});
+
+$('assignEmps').onclick = () => { renderAssignEmps(); $('dAssignE').showModal(); };
+function renderAssignEmps(err) {
+  let h = '<h2>שיוך עובדים לפרויקטים</h2><div class="muted">בחר לכל פרויקט את האחראי בכל תפקיד. הבחירה חלה על כל המשימות של הפרויקט. אפשר לשנות משימה בודדת בחלון התא. העובדים עצמם מנוהלים במסך "עובדים".</div>';
+  h += '<div class="scroll"><table class="grid"><thead><tr><th></th>' + S.roles.map(r => `<th>${esc(r.name)}</th>`).join('') + '</tr></thead><tbody>';
+  for (const p of S.projects) {
+    h += `<tr data-p="${p.id}"><th>${esc(p.name)}</th>`;
+    for (const r of S.roles) {
+      const list = S.employees.filter(e => e.role === r.key).concat(S.employees.filter(e => e.role !== r.key));
+      h += `<td><select data-role="${r.key}" data-orig="${esc(p.owners[r.key] || '')}"><option value="">ללא</option>${list.map(e => `<option value="${esc(e.name)}" ${e.name === p.owners[r.key] ? 'selected' : ''}>${esc(e.name)}${e.role !== r.key ? ' (' + esc(roleName(e.role)) + ')' : ''}</option>`).join('')}</select></td>`;
+    }
+    h += '</tr>';
+  }
+  h += '</tbody></table></div>';
+  if (!S.employees.length) h += '<div class="muted">אין עובדים. הוסף דרך "עובדים".</div>';
+  h += `<div class="err" id="aeerr">${esc(err || '')}</div><div class="foot"><span></span><span><button data-close>סגור</button> <button class="primary" id="aesave">שמור שיוך</button></span></div>`;
+  $('dAssignE').innerHTML = h;
+}
+$('dAssignE').addEventListener('click', async e => {
+  const d = $('dAssignE');
+  try {
+    if (e.target.closest('[data-close]')) return d.close();
+    if (e.target.id === 'aesave') {
+      // only roles that were changed are sent, so untouched per-task assignments stay as they are
+      for (const tr of d.querySelectorAll('tbody tr')) {
+        const owners = {};
+        tr.querySelectorAll('select[data-role]').forEach(s => { if (s.value !== s.dataset.orig) owners[s.dataset.role] = s.value; });
+        if (Object.keys(owners).length) await api('/api/project/update', {id:tr.dataset.p, owners});
+      }
+      d.close();
+    }
+  } catch (er) { renderAssignEmps(er.message); }
 });
 
 /* ---------- module management ---------- */

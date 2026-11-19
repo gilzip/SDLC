@@ -7,8 +7,8 @@ Every stage is closed by hand ("complete") by its owner, and only then does the 
 AI Dev runs outside the system; its owner just reports it finished. "back" sends a cell to
 the previous stage with a note. Every stage of every cell is assigned to an employee.
 All data lives in one Excel workbook (the database); the page polls /api/state.
-Sheets: ראשי (colored status matrix), פרויקטים, עובדים, תת מודולים, שיוך (project x module +
-stage states + owners), יומן.
+Sheets: ראשי (colored status matrix), פרויקטים (only the project names), תת מודולים, שיוך (project x module +
+stage states + owners), עובדים, הגדרות פרויקט (end-to-end approval and role owners per project), יומן.
 Never reset: only a missing file is seeded. Reads/writes are serialized by a thread lock and a lock file.
 """
 import argparse, copy, json, os, socket, sys, threading, time, uuid
@@ -73,8 +73,8 @@ def seed():
     return {"modules": mods, "projects": projects, "employees": [], "cells": {}}
 
 
-SH_MAIN, SH_PROJECTS, SH_EMP, SH_MODULES, SH_ASSIGN, SH_LOG = (
-    "ראשי", "פרויקטים", "עובדים", "תת מודולים", "שיוך", "יומן")
+SH_MAIN, SH_PROJECTS, SH_MODULES, SH_ASSIGN, SH_EMP, SH_PSET, SH_LOG = (
+    "ראשי", "פרויקטים", "תת מודולים", "שיוך", "עובדים", "הגדרות פרויקט", "יומן")
 LEGACY_FLOW = "זרם"  # sheet name used by an earlier version of the file
 STATE_HE = {"pend": "ממתין", "run": "בעבודה", "done": "הסתיים"}
 STATE_CODE = {v: k for k, v in STATE_HE.items()}
@@ -187,13 +187,19 @@ def load():
             v = next((e["name"] for e in d["employees"] if e["email"].lower() == v.lower()), v)
         return v
 
-    pheader = [str(h) for h in next(wb[SH_PROJECTS].iter_rows(max_row=1, values_only=True))] if SH_PROJECTS in wb.sheetnames else []
-    role_cols = {r["key"]: next((i for i, h in enumerate(pheader) if h.startswith("ברירת מחדל: " + r["name"] + " (")), None)
+    # the projects sheet holds only the projects. The end-to-end approval and the role owners live in
+    # "הגדרות פרויקט" (files written before that sheet existed kept them as extra columns on the projects sheet)
+    settings_sheet = SH_PSET if SH_PSET in wb.sheetnames else SH_PROJECTS
+    sheader = [str(h) for h in next(wb[settings_sheet].iter_rows(max_row=1, values_only=True))] if settings_sheet in wb.sheetnames else []
+    role_cols = {r["key"]: next((i for i, h in enumerate(sheader) if h.startswith("ברירת מחדל: " + r["name"] + " (")), None)
                  for r in ROLES}
+    settings = {str(r[0]): r for r in rows(settings_sheet)}
     for r in rows(SH_PROJECTS):
         p = new_project(str(r[1]))
-        p.update(id=str(r[0]), e2e=cellv(r, 2) == E2E_DONE_HE, e2e_by=cellv(r, 3), e2e_ts=cellv(r, 4) or 0)
-        p["owners"] = {k: owner(cellv(r, role_cols[k])) if role_cols[k] is not None else "" for k in ROLE_KEYS}
+        p["id"] = str(r[0])
+        sr = settings.get(p["id"], ())
+        p.update(e2e=cellv(sr, 2) == E2E_DONE_HE, e2e_by=cellv(sr, 3), e2e_ts=cellv(sr, 4) or 0)
+        p["owners"] = {k: owner(cellv(sr, role_cols[k])) if role_cols[k] is not None else "" for k in ROLE_KEYS}
         d["projects"].append(p)
     byid = {p["id"]: p for p in d["projects"]}
     # assignment row: project id, project, module id, module, <stage states>, status, <stage owners>
@@ -281,23 +287,26 @@ def save(d):
                 c.fill = PatternFill("solid", fgColor=f)
                 c.alignment = Alignment(horizontal="center")
     ws.append([])
-    ws.append(["גיליון תצוגה בלבד, מתעדכן אוטומטית מהנתונים. הנתונים עצמם נשמרים בגיליונות פרויקטים, עובדים, תת מודולים, שיוך ויומן ולא נמחקים."])
+    ws.append(["גיליון תצוגה בלבד, מתעדכן אוטומטית מהנתונים. הנתונים עצמם נשמרים בגיליונות פרויקטים, תת מודולים, שיוך, עובדים, הגדרות פרויקט ויומן ולא נמחקים."])
     ws.append(["לעריכה ידנית יש לערוך את הגיליונות האלה ולא את הגיליון הזה."])
 
-    ws = fresh(wb, SH_PROJECTS, ["מזהה", "שם", "בדיקה קצה לקצה (פרויקט)", "אושר על ידי", "זמן אישור (unix)"]
-               + ["ברירת מחדל: " + r["name"] + " (שם עובד)" for r in ROLES], 1)
+    ws = fresh(wb, SH_PROJECTS, ["מזהה", "שם"], 1)
     for p in d["projects"]:
-        ws.append([p["id"], p["name"], E2E_DONE_HE if p.get("e2e") else "", p.get("e2e_by", ""), p.get("e2e_ts", 0) or ""]
-                  + [p.get("owners", {}).get(k, "") for k in ROLE_KEYS])
-    ws = fresh(wb, SH_EMP, ["שם", "אימייל", "תפקיד"], 2)
-    for e in d["employees"]:
-        ws.append([e["name"], e["email"], ROLE_HE[e["role"]]])
-    ws = fresh(wb, SH_MODULES, ["מזהה", "שם"], 3)
+        ws.append([p["id"], p["name"]])
+    ws = fresh(wb, SH_MODULES, ["מזהה", "שם"], 2)
     for m in d["modules"]:
         ws.append([m["id"], m["name"]])
     ws = fresh(wb, SH_ASSIGN, ["מזהה פרויקט", "פרויקט", "מזהה תת מודול", "תת מודול"] + [s["name"] for s in STAGES]
-               + [STATUS_COL] + ["אחראי: " + s["name"] + " (שם עובד)" for s in STAGES], 4)
-    lg = fresh(wb, SH_LOG, ["מזהה פרויקט", "מזהה תת מודול", "זמן (unix)", "הודעה", "זמן"], 5)
+               + [STATUS_COL] + ["אחראי: " + s["name"] + " (שם עובד)" for s in STAGES], 3)
+    ws2 = fresh(wb, SH_EMP, ["שם", "אימייל", "תפקיד"], 4)
+    for e in d["employees"]:
+        ws2.append([e["name"], e["email"], ROLE_HE[e["role"]]])
+    ws3 = fresh(wb, SH_PSET, ["מזהה פרויקט", "פרויקט", "בדיקה קצה לקצה (פרויקט)", "אושר על ידי", "זמן אישור (unix)"]
+                + ["ברירת מחדל: " + r["name"] + " (שם עובד)" for r in ROLES], 5)
+    for p in d["projects"]:
+        ws3.append([p["id"], p["name"], E2E_DONE_HE if p.get("e2e") else "", p.get("e2e_by", ""), p.get("e2e_ts", 0) or ""]
+                   + [p.get("owners", {}).get(k, "") for k in ROLE_KEYS])
+    lg = fresh(wb, SH_LOG, ["מזהה פרויקט", "מזהה תת מודול", "זמן (unix)", "הודעה", "זמן"], 6)
     for p in d["projects"]:
         for l in p.get("plog", []):
             lg.append([p["id"], "*", l["ts"], l["m"], time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(l["ts"]))])

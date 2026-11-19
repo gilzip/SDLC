@@ -64,7 +64,11 @@ try:
     check("excel created with all sheets", os.path.exists(XLSX))
     from openpyxl import load_workbook
     sheets = load_workbook(XLSX).sheetnames
-    check("excel sheets: main + sub sheets", sheets[:6] == ["ראשי", "פרויקטים", "עובדים", "תת מודולים", "שיוך", "יומן"], sheets)
+    check("excel sheets: main + sub sheets", sheets == ["ראשי", "פרויקטים", "תת מודולים", "שיוך", "עובדים", "הגדרות פרויקט", "יומן"], sheets)
+    pws = load_workbook(XLSX)["פרויקטים"]
+    check("projects sheet holds only the project list (id, name)", pws.max_column == 2 and
+          [r[1] for r in pws.iter_rows(min_row=2, values_only=True)] == ["ירפא", "פורמידבל", "כללית", "מאוחדת", "לאומית", "יקר", "משרד הבטחון", "צה\"ל", "ממשק לרובוט"],
+          [r[1] for r in pws.iter_rows(min_row=2, values_only=True)])
 
     # ---- employees
     emps = [("דרור", "pm"), ("אייל", "readiness"), ("אדיר", "architect"), ("שמעון", "dev"), ("נחום", "qa")]
