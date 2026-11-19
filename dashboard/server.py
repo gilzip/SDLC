@@ -385,7 +385,7 @@ def cell_action(d, pid, mid, action, stage, who, note):
         if any(s != "pend" for s in st):
             raise ValueError("already started")
         st[0] = "run"
-        log(c, "%sהזרם התחיל, שלב: %s" % (by, STAGES[0]["name"]))
+        log(c, "%sה-Flow התחיל, שלב: %s" % (by, STAGES[0]["name"]))
     elif action == "complete":
         # the stage owner confirms by hand; the cell moves on to the next stage
         if st[stage] != "run":
@@ -396,7 +396,7 @@ def cell_action(d, pid, mid, action, stage, who, note):
             st[stage + 1] = "run"
             log(c, "הועבר לשלב: %s" % STAGES[stage + 1]["name"])
         else:
-            log(c, "המודול נבדק ותקין קצה לקצה, הזרם הושלם")
+            log(c, "המודול נבדק ותקין קצה לקצה, ה-Flow הושלם")
     elif action == "back":
         # a stage owner found a problem: send the cell to the previous stage with a note
         if st[stage] != "run" or stage == 0:
@@ -413,7 +413,7 @@ def cell_action(d, pid, mid, action, stage, who, note):
         log(c, "%sנפתח מחדש בשלב %s: %s" % (by, STAGES[stage]["name"], note))
     elif action == "reset":
         c["stages"] = ["pend"] * N
-        log(c, "%sהזרם אופס" % by)
+        log(c, "%sה-Flow אופס" % by)
     else:
         raise ValueError("unknown action")
 

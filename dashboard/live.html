@@ -193,7 +193,7 @@ function renderFilter() {
 }
 
 function render() {
-  $('flow').textContent = 'זרימה: ' + S.stages.map(s => s.name).join(' ← ');
+  $('flow').textContent = 'Flow: ' + S.stages.map(s => s.name).join(' ← ');
   renderFilter();
   S.stages.forEach((s, i) => document.documentElement.style.setProperty('--s' + i, '#' + s.color));
   $('stagelegend').innerHTML = S.stages.map((s, i) => `<span class="lgi"><i style="background:var(--s${i})"></i>${esc(s.name)} <small>(${esc(roleName(s.role))})</small></span>`).join('');
@@ -257,8 +257,8 @@ function renderCell() {
   h += '<div class="err" id="cerr"></div>';
   h += '<ul class="log">' + c.log.slice(0, 12).map(l => `<li>${new Date(l.ts*1000).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'})} · ${esc(l.m)}</li>`).join('') + '</ul>';
   h += '<div class="foot"><span>';
-  if (c.status === 'todo') h += '<button class="primary" data-a="start">התחל זרם</button>';
-  else h += '<button class="danger" data-a="reset">אפס זרם</button>';
+  if (c.status === 'todo') h += '<button class="primary" data-a="start">התחל Flow</button>';
+  else h += '<button class="danger" data-a="reset">אפס Flow</button>';
   h += '</span><button data-close>סגור</button></div>';
   $('dCell').innerHTML = h;
 }
@@ -387,7 +387,7 @@ $('dProject').addEventListener('click', async e => {
 /* ---------- assignment screens: sub-modules to projects, employees to projects ---------- */
 $('assignModules').onclick = () => { renderAssignModules(); $('dAssignM').showModal(); };
 function renderAssignModules(err) {
-  let h = '<h2>שיוך תת מודולים לפרויקטים</h2><div class="muted">סמן אילו תתי מודולים שייכים לכל פרויקט. אפשר לשייך לפרויקט רק חלק מהם. הסרת שיוך מוחקת את מצב הזרם של אותו תא.</div>';
+  let h = '<h2>שיוך תת מודולים לפרויקטים</h2><div class="muted">סמן אילו תתי מודולים שייכים לכל פרויקט. אפשר לשייך לפרויקט רק חלק מהם. הסרת שיוך מוחקת את מצב ה-Flow של אותו תא.</div>';
   h += '<div class="scroll"><table class="grid"><thead><tr><th></th>' + S.modules.map(m => `<th>${esc(m.name)}</th>`).join('') + '</tr></thead><tbody>';
   for (const p of S.projects)
     h += `<tr data-p="${p.id}"><th>${esc(p.name)}</th>` + S.modules.map(m => `<td><input type="checkbox" data-m="${m.id}" data-orig="${p.modules.includes(m.id) ? 1 : 0}" ${p.modules.includes(m.id) ? 'checked' : ''} aria-label="${esc(p.name)} / ${esc(m.name)}"></td>`).join('') + '</tr>';
@@ -472,7 +472,7 @@ $('dModules').addEventListener('click', async e => {
 /* ---------- employees ---------- */
 const roleOptions = sel => S.roles.map(r => `<option value="${r.key}" ${r.key === sel ? 'selected' : ''}>${esc(r.name)}</option>`).join('');
 function renderEmps(err, keep) {
-  let h = '<h2>עובדים</h2><div class="muted">כל משימה בזרם משויכת לעובד. העובד מזוהה לפי השם, ושינוי שם מתעדכן בכל המשימות. כמה עובדים יכולים לשתף אותה כתובת מייל. מחיקת עובד מסירה אותו מכל המשימות.</div>';
+  let h = '<h2>עובדים</h2><div class="muted">כל משימה ב-Flow משויכת לעובד. העובד מזוהה לפי השם, ושינוי שם מתעדכן בכל המשימות. כמה עובדים יכולים לשתף אותה כתובת מייל. מחיקת עובד מסירה אותו מכל המשימות.</div>';
   if (!S.employees.length) h += '<div class="muted" style="margin-top:10px">עדיין אין עובדים. הוסף למטה.</div>';
   for (const e of S.employees)
     h += `<div class="row emp" data-key="${esc(e.name)}"><input type="text" class="en" value="${esc(e.name)}" aria-label="שם"><input type="text" class="ee" value="${esc(e.email)}" dir="ltr" aria-label="אימייל"><select class="er" aria-label="תפקיד">${roleOptions(e.role)}</select><button data-save>שמור</button><button class="danger" data-del>מחק</button></div>`;

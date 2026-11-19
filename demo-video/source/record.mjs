@@ -90,7 +90,7 @@ await sleep(8000)
 const first = cells[0]
 await caption('לוחצים על תא ופותחים את המשימה', `${first.name} / ${mod[first.m]}: ששת השלבים, ולכל שלב עובד אחראי`)
 await click(tile(first)); await sleep(5000)
-await caption('התחלת הזרם', 'בעל התפקיד מפעיל את הזרם בלחיצה')
+await caption('התחלת ה-Flow', 'בעל התפקיד מפעיל את ה-Flow בלחיצה')
 await click('#dCell [data-a="start"]'); await sleep(SETTLE)
 await caption('שלב 1: מנהל מוצר', 'דרור מסיים את האיפיון ולוחץ "סיים איפיון". רק אחרי הלחיצה התא עובר לשלב הבא')
 await click('#dCell [data-a="complete"][data-k="0"]'); await sleep(SETTLE + 1200)
