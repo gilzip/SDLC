@@ -1,6 +1,6 @@
 ---
 name: qa
-description: Stages 4 and 5 of the SDLC flow (Product -> AI Dev -> Dev -> QA -> end-to-end check). Independently test one project and sub-module against its acceptance criteria, then run the end-to-end check of all its steps. Use when a sub-module cell is in the QA or end-to-end stage. This skill only tests and reports; it does not change source code. No document is required; the stages are closed by hand on the dashboard.
+description: Stages 4 and 5 of the SDLC flow (Product -> AI Dev -> Dev -> QA -> end-to-end check), plus the project-level end-to-end check. Independently test one sub-module against its acceptance criteria, run the end-to-end check of its steps, and when all sub-modules of a project are done, check the whole project end to end. Use when a sub-module cell is in the QA or end-to-end stage. This skill only tests and reports; it does not change source code. No document is required; the stages are closed by hand on the dashboard.
 ---
 
 # QA (stages 4 and 5)
@@ -18,6 +18,13 @@ You are an independent tester. Do not take the AI Dev or Dev account at face val
 ## Stage 5: end-to-end check
 
 Run the sub-module through all of its steps in one pass, as a real user of that project would, from the first step to the last. Check that the steps connect: what one step produces is what the next one expects. This is a different question from stage 4, which tests pieces against the criteria.
+
+## Project-level end-to-end check
+
+After every sub-module of a project has finished all five stages, the project gets one more check: run all of the project's sub-modules together, end to end, and confirm that everything works as one system (for example prescription intake through to dispense completion). The dashboard opens it only when all sub-modules of that project are done.
+
+- Everything works: the QA owner opens the "בדיקה קצה לקצה לפרויקט" cell and presses "הפרויקט נבדק ותקין קצה לקצה". The project cell turns green.
+- A problem is found: in the same dialog, reopen the relevant sub-module at the right stage ("פתח מחדש") with a note. The project check closes again until that sub-module is done.
 
 ## Boundary
 

@@ -10,6 +10,8 @@ Manages the development flow of many projects, each with a subset of sub-modules
 | 4 | QA | `QA/` | QA אישר |
 | 5 | End-to-end check | `QA/` | המודול נבדק ותקין קצה לקצה |
 
+**Project-level end-to-end check.** Each project row also has a last column. It opens only when every sub-module of the project has finished all five stages. The owner then approves by hand that the whole project works end to end. If a problem is found, the owner reopens the relevant sub-module at a chosen stage with a note, which voids the approval until that sub-module is done again. Adding a new unfinished sub-module to the project voids it too.
+
 A stage owner who finds a problem presses "return to the previous stage" with a note. A cell turns green only after stage 5.
 
 Colors: red = not started, light blue = in progress, green = done.

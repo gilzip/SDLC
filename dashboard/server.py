@@ -88,8 +88,32 @@ def file_lock(timeout=15, stale=60):
             pass
 
 
+E2E_DONE_HE = "הסתיים"
+
+
 def status_of(st):
     return "done" if all(s == "done" for s in st) else "todo" if all(s == "pend" for s in st) else "run"
+
+
+def project_e2e(d, p):
+    """Project-level end-to-end check: opens only when every sub-module of the project is done.
+    Returns (status, done_count, total) with status na / todo / run / done."""
+    total = len(p["modules"])
+    done = sum(1 for m in p["modules"]
+               if status_of(d["cells"].get(p["id"] + ":" + m, {"stages": ["pend"] * N})["stages"]) == "done")
+    if total == 0:
+        return "na", 0, 0
+    if done < total:
+        return "todo", done, total
+    return ("done" if p.get("e2e") else "run"), done, total
+
+
+def normalize(d):
+    """An approval is void as soon as any sub-module of the project is no longer done."""
+    for p in d["projects"]:
+        if p.get("e2e") and project_e2e(d, p)[0] == "todo":
+            p["e2e"] = False
+            p.setdefault("plog", []).insert(0, {"ts": time.time(), "m": "אישור הבדיקה קצה לקצה בוטל: תת מודול נפתח מחדש או נוסף"})
 
 
 def load():
@@ -102,7 +126,9 @@ def load():
         return d
     rows = lambda name: [r for r in wb[name].iter_rows(min_row=2, values_only=True) if r and r[0]] if name in wb.sheetnames else []
     d = {"modules": [{"id": str(r[0]), "name": str(r[1])} for r in rows(SH_MODULES)],
-         "projects": [{"id": str(r[0]), "name": str(r[1]), "modules": []} for r in rows(SH_PROJECTS)],
+         "projects": [{"id": str(r[0]), "name": str(r[1]), "modules": [], "plog": [],
+                       "e2e": len(r) > 2 and r[2] == E2E_DONE_HE, "e2e_by": (r[3] or "") if len(r) > 3 else "",
+                       "e2e_ts": (r[4] or 0) if len(r) > 4 else 0} for r in rows(SH_PROJECTS)],
          "cells": {}}
     byid = {p["id"]: p for p in d["projects"]}
     # assignment row: project id, project, module id, module, <stage states>, status
@@ -119,9 +145,14 @@ def load():
                 st[first] = "run"
             d["cells"][pid + ":" + mid] = {"stages": st, "log": []}
     for r in rows(SH_LOG):
+        entry = {"ts": float(r[2]), "m": str(r[3])}
+        if str(r[1]) == "*":  # project-level entry
+            if str(r[0]) in byid:
+                byid[str(r[0])]["plog"].append(entry)
+            continue
         c = d["cells"].get(str(r[0]) + ":" + str(r[1]))
         if c is not None:
-            c["log"].append({"ts": float(r[2]), "m": str(r[3])})
+            c["log"].append(entry)
     return d
 
 
@@ -144,7 +175,7 @@ def save(d):
         wb.remove(wb.active)
     mname = {m["id"]: m["name"] for m in d["modules"]}
 
-    ws = fresh(wb, SH_MAIN, ["פרויקט"] + [m["name"] for m in d["modules"]], 0)
+    ws = fresh(wb, SH_MAIN, ["פרויקט"] + [m["name"] for m in d["modules"]] + ["בדיקה קצה לקצה (פרויקט)"], 0)
     for p in d["projects"]:
         row = [p["name"]]
         fills = []
@@ -158,6 +189,10 @@ def save(d):
             else:
                 row.append("")
                 fills.append(None)
+        e2e, n_done, n_all = project_e2e(d, p)
+        row.append({"na": "", "todo": "ממתין לסיום תתי המודולים (%d/%d)" % (n_done, n_all),
+                    "run": "ממתין לבדיקה קצה לקצה", "done": "הסתיים"}[e2e])
+        fills.append({"na": None, "todo": FILL["todo"], "run": FILL["run"], "done": FILL["done"]}[e2e])
         ws.append(row)
         for i, f in enumerate(fills):
             if f:
@@ -167,15 +202,17 @@ def save(d):
     ws.append([])
     ws.append(["גיליון זה נבנה מחדש בכל שמירה. עריכה ידנית מתבצעת בגיליונות פרויקטים, תת מודולים ושיוך."])
 
-    ws = fresh(wb, SH_PROJECTS, ["מזהה", "שם"], 1)
+    ws = fresh(wb, SH_PROJECTS, ["מזהה", "שם", "בדיקה קצה לקצה (פרויקט)", "אושר על ידי", "זמן אישור (unix)"], 1)
     for p in d["projects"]:
-        ws.append([p["id"], p["name"]])
+        ws.append([p["id"], p["name"], E2E_DONE_HE if p.get("e2e") else "", p.get("e2e_by", ""), p.get("e2e_ts", 0) or ""])
     ws = fresh(wb, SH_MODULES, ["מזהה", "שם"], 2)
     for m in d["modules"]:
         ws.append([m["id"], m["name"]])
     ws = fresh(wb, SH_ASSIGN, ["מזהה פרויקט", "פרויקט", "מזהה תת מודול", "תת מודול"] + [s["name"] for s in STAGES] + ["סטטוס"], 3)
     lg = fresh(wb, SH_LOG, ["מזהה פרויקט", "מזהה תת מודול", "זמן (unix)", "הודעה", "זמן"], 4)
     for p in d["projects"]:
+        for l in p.get("plog", []):
+            lg.append([p["id"], "*", l["ts"], l["m"], time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(l["ts"]))])
         for mid in p["modules"]:
             c = d["cells"].get(p["id"] + ":" + mid, {"stages": ["pend"] * N, "log": []})
             ws.append([p["id"], p["name"], mid, mname.get(mid, "")] + [STATE_HE[s] for s in c["stages"]] + [STATUS_HE[status_of(c["stages"])]])
@@ -214,7 +251,12 @@ def view(d):
             st = c["stages"]
             status = status_of(st)
             cells[p["id"] + ":" + mid] = {"stages": st, "log": c["log"], "status": status}
-    return {"stages": STAGES, "modules": d["modules"], "projects": d["projects"], "cells": cells}
+    projects = []
+    for p in d["projects"]:
+        e2e, n_done, n_all = project_e2e(d, p)
+        projects.append({"id": p["id"], "name": p["name"], "modules": p["modules"], "e2e": e2e,
+                         "done": n_done, "total": n_all, "e2e_by": p.get("e2e_by", ""), "log": p.get("plog", [])[:12]})
+    return {"stages": STAGES, "modules": d["modules"], "projects": projects, "cells": cells}
 
 
 def cell_action(d, pid, mid, action, stage, who, note):
@@ -248,6 +290,13 @@ def cell_action(d, pid, mid, action, stage, who, note):
         st[stage] = "pend"
         st[stage - 1] = "run"
         log(c, "%sהוחזר מ%s ל%s: %s" % (by, STAGES[stage]["name"], STAGES[stage - 1]["name"], note))
+    elif action == "reopen":
+        # the project-level end-to-end check found a problem in this sub-module: reopen it at a stage
+        if status_of(st) != "done":
+            raise ValueError("sub-module is not finished")
+        for i in range(stage, N):
+            st[i] = "run" if i == stage else "pend"
+        log(c, "%sנפתח מחדש בשלב %s: %s" % (by, STAGES[stage]["name"], note))
     elif action == "reset":
         c["stages"] = ["pend"] * N
         log(c, "%sהזרם אופס" % by)
@@ -293,8 +342,17 @@ def handle(d, path, body):
     elif path == "/api/cell":
         cell_action(d, body["project"], body["module"], str(body["action"]), int(body.get("stage", 0)),
                     str(body.get("who", ""))[:60], str(body.get("note", ""))[:500])
+    elif path == "/api/project/e2e":
+        # manual approval that the whole project works end to end across all its sub-modules
+        p = next(p for p in d["projects"] if p["id"] == body["id"])
+        if project_e2e(d, p)[0] != "run":
+            raise ValueError("all sub-modules must be finished first")
+        who = str(body.get("who", ""))[:60]
+        p["e2e"], p["e2e_by"], p["e2e_ts"] = True, who, time.time()
+        p.setdefault("plog", []).insert(0, {"ts": time.time(), "m": "%sהפרויקט נבדק ותקין קצה לקצה" % ((who + " — ") if who else "")})
     else:
         raise KeyError(path)
+    normalize(d)
 
 
 class Handler(BaseHTTPRequestHandler):

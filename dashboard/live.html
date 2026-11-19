@@ -37,6 +37,9 @@ th.rowh{text-align:start;white-space:nowrap;min-width:130px}
 th .ed{opacity:.5;border:0;background:none;padding:0 4px;font-size:13px}
 th .ed:hover{opacity:1}
 td{padding:0}
+th.e2eh{border-inline-start:2px solid var(--line);padding-inline-start:12px}
+td.e2ec{padding-inline-start:6px;border-inline-start:2px solid var(--line)}
+.stages select{font:inherit;padding:4px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
 .c{display:block;width:100%;min-height:68px;border-radius:10px;border:0;padding:8px;text-align:center;cursor:pointer;
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px}
 .c.todo{background:var(--todo);color:var(--todo-ink)}
@@ -94,6 +97,7 @@ input[type=text],textarea{width:100%;font:inherit;padding:8px 10px;border-radius
 <main><div id="matrix"></div></main>
 
 <dialog id="dCell"></dialog>
+<dialog id="dE2E"></dialog>
 <dialog id="dProject"></dialog>
 <dialog id="dModules"></dialog>
 
@@ -130,7 +134,7 @@ function render() {
   if (!S.projects.length) { $('matrix').innerHTML = '<div class="empty">אין פרויקטים. הוסף פרויקט להתחלה.</div>'; renderOpen(); return; }
   let h = '<table><thead><tr><th></th>';
   for (const m of S.modules) h += `<th>${esc(m.name)}</th>`;
-  h += '</tr></thead><tbody>';
+  h += '<th class="e2eh">בדיקה קצה לקצה<br>לפרויקט</th></tr></thead><tbody>';
   for (const p of S.projects) {
     h += `<tr><th class="rowh">${esc(p.name)} <button class="ed" data-p="${p.id}" title="עריכת פרויקט">✎</button></th>`;
     for (const m of S.modules) {
@@ -140,6 +144,11 @@ function render() {
       const pips = c.stages.map((s, k) => `<b class="${s==='done'?'on':s==='run'?'cur':''}"></b>`).join('');
       h += `<td><button class="c ${c.status}" data-p="${p.id}" data-m="${m.id}"><span class="lbl">${esc(i.lbl)}</span><span class="pips">${pips}</span><span class="sub">${esc(i.sub)}</span></button></td>`;
     }
+    if (p.e2e === 'na') h += '<td class="e2ec"><span class="na" title="אין תתי מודולים"></span></td>';
+    else {
+      const t = {todo:['ממתין לסיום תתי המודולים', `${p.done}/${p.total}`], run:['ממתין לבדיקה קצה לקצה', `${p.total}/${p.total} הסתיימו`], done:['הסתיים', 'נבדק קצה לקצה']}[p.e2e];
+      h += `<td class="e2ec"><button class="c ${p.e2e}" data-e="${p.id}"><span class="lbl">${t[0]}</span><span class="sub">${t[1]}</span></button></td>`;
+    }
     h += '</tr>';
   }
   $('matrix').innerHTML = h + '</tbody></table>';
@@ -147,6 +156,7 @@ function render() {
 }
 
 $('matrix').addEventListener('click', e => {
+  const pe = e.target.closest('[data-e]'); if (pe) return openE2E(pe.dataset.e);
   const c = e.target.closest('.c'); if (c) return openCell(c.dataset.p, c.dataset.m);
   const ed = e.target.closest('.ed'); if (ed) openProject(ed.dataset.p);
 });
@@ -154,7 +164,7 @@ $('matrix').addEventListener('click', e => {
 /* ---------- cell detail ---------- */
 let openKey = null, openSig = '';
 function openCell(pid, mid) { openKey = [pid, mid]; openSig = ''; renderCell(); if (!$('dCell').open) $('dCell').showModal(); }
-function renderOpen() { if ($('dCell').open) renderCell(); }
+function renderOpen() { if ($('dCell').open) renderCell(); if ($('dE2E').open) renderE2E(); }
 function renderCell() {
   const [pid, mid] = openKey;
   const p = S.projects.find(x => x.id === pid), m = S.modules.find(x => x.id === mid), c = S.cells[pid + ':' + mid];
@@ -194,6 +204,50 @@ $('dCell').addEventListener('click', async e => {
   } catch (er) { $('cerr').textContent = er.message; }
 });
 $('dCell').addEventListener('close', () => { openKey = null; });
+
+/* ---------- project-level end-to-end check ---------- */
+let e2eId = null, e2eSig = '';
+function openE2E(pid) { e2eId = pid; e2eSig = ''; renderE2E(); if (!$('dE2E').open) $('dE2E').showModal(); }
+function renderE2E() {
+  const p = S.projects.find(x => x.id === e2eId);
+  if (!p) { $('dE2E').close(); return; }
+  const mods = S.modules.filter(m => p.modules.includes(m.id));
+  const sig = JSON.stringify([p, mods.map(m => S.cells[p.id + ':' + m.id].stages)]); if (sig === e2eSig) return; e2eSig = sig;
+  const who = $('ewho') ? $('ewho').value : (localStorage.getItem('who') || ''), note = $('enote') ? $('enote').value : '';
+  let h = `<h2>${esc(p.name)} · בדיקה קצה לקצה לפרויקט</h2><div class="muted">נפתחת רק אחרי שכל תתי המודולים של הפרויקט סיימו את כל שלביהם, כולל הבדיקה קצה לקצה שלהם. האישור ידני. אם נמצאה תקלה, פתח מחדש את תת המודול הרלוונטי בשלב המתאים.</div><ul class="stages">`;
+  for (const m of mods) {
+    const c = S.cells[p.id + ':' + m.id];
+    h += `<li class="${c.status==='done'?'done':c.status==='run'?'run':''}" data-m="${m.id}"><span class="n">${c.stages.filter(s=>s==='done').length}</span><b>${esc(m.name)}</b><span class="st">${c.status==='done'?'הסתיים':c.status==='run'?'בעבודה':'לא התחיל'}</span>`;
+    if (c.status === 'done') h += `<select>${S.stages.map((s,k)=>`<option value="${k}">${esc(s.name)}</option>`).join('')}</select><button class="danger" data-reopen>פתח מחדש</button>`;
+    h += '</li>';
+  }
+  h += '</ul>';
+  if (!mods.length) h += '<div class="muted">אין תתי מודולים משויכים לפרויקט.</div>';
+  h += `<label for="ewho">שם המאשר</label><input type="text" id="ewho" value="${esc(who)}">`;
+  h += `<label for="enote">הערה (נדרשת בפתיחה מחדש)</label><input type="text" id="enote" value="${esc(note)}"><div class="err" id="eerr"></div>`;
+  h += `<ul class="log">${p.log.map(l => `<li>${new Date(l.ts*1000).toLocaleString('he-IL',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})} · ${esc(l.m)}</li>`).join('')}</ul>`;
+  h += '<div class="foot"><span>';
+  if (p.e2e === 'run') h += '<button class="primary" data-e2e>הפרויקט נבדק ותקין קצה לקצה</button>';
+  else if (p.e2e === 'done') h += `<span class="muted">אושר${p.e2e_by ? ' על ידי ' + esc(p.e2e_by) : ''}</span>`;
+  else h += `<span class="muted">ממתין לסיום תתי המודולים (${p.done}/${p.total})</span>`;
+  h += '</span><button data-close>סגור</button></div>';
+  $('dE2E').innerHTML = h;
+}
+$('dE2E').addEventListener('click', async e => {
+  if (e.target.closest('[data-close]')) return $('dE2E').close();
+  const who = $('ewho').value.trim(); localStorage.setItem('who', who);
+  try {
+    if (e.target.closest('[data-e2e]')) await api('/api/project/e2e', {id:e2eId, who});
+    const ro = e.target.closest('[data-reopen]');
+    if (ro) {
+      const note = $('enote').value.trim(); if (!note) { $('eerr').textContent = 'יש לכתוב הערה לפתיחה מחדש'; return; }
+      const li = ro.closest('li');
+      await api('/api/cell', {project:e2eId, module:li.dataset.m, action:'reopen', stage:+li.querySelector('select').value, who, note});
+      $('enote').value = '';
+    }
+  } catch (er) { $('eerr').textContent = er.message; }
+});
+$('dE2E').addEventListener('close', () => { e2eId = null; });
 
 /* ---------- project add / edit ---------- */
 $('addProject').onclick = () => openProject(null);
