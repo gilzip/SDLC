@@ -157,6 +157,24 @@ try:
     check("main sheet note says it is display only", any("תצוגה בלבד" in str(t) for t in texts))
     check("employees sheet has name+email+role", [c.value for c in wb["עובדים"][2]] == ["דרור", "giltzip@gmail.com", "pm" if False else "מנהל מוצר"], [c.value for c in wb["עובדים"][2]])
 
+    # ---- each stage has its own color, in the dashboard data and in the Excel main sheet
+    s = state()
+    check("every stage carries a distinct color", len({x["color"] for x in s["stages"]}) == len(s["stages"]) == 6)
+    yar = {p["name"]: p for p in s["projects"]}["ירפא"]
+    ym = yar["modules"]
+    for m in ym[:3]:
+        post("/api/cell", {"project": yar["id"], "module": m, "action": "start"})
+    post("/api/cell", {"project": yar["id"], "module": ym[1], "action": "complete", "stage": 0})
+    post("/api/cell", {"project": yar["id"], "module": ym[2], "action": "complete", "stage": 0})
+    post("/api/cell", {"project": yar["id"], "module": ym[2], "action": "complete", "stage": 1})
+    mws = load_workbook(XLSX)["ראשי"]
+    row = next(r for r in mws.iter_rows(min_row=2) if r[0].value == "ירפא")
+    fills = [c.fill.fgColor.rgb[-6:] for c in row[1:4]]
+    want = [s["stages"][i]["color"] for i in range(3)]
+    check("Excel main sheet colors cells by their current stage", fills == want, (fills, want))
+    check("not-started cells are grey, finished cells are green in Excel",
+          row[4].fill.fgColor.rgb[-6:] == "E1E6EC" and next(r for r in mws.iter_rows(min_row=2) if r[0].value == "כללית")[1].fill.fgColor.rgb[-6:] == "A6E3BF")
+
     # ---- employee rename / delete propagate
     check("rename employee", post("/api/employee/update", {"key": "נחום", "name": "נחום כהן", "email": "giltzip@gmail.com", "role": "qa"})[0] == 200)
     s = state()

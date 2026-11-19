@@ -83,8 +83,8 @@ const tile = (c) => `.c[data-p="${c.p.id}"][data-m="${c.m}"]`
 try {
 await caption('הדגמה: ניהול זרימת פיתוח', '9 פרויקטים × תתי מודולים, כל תא הוא משימה שעוברת 6 שלבים. נריץ במקביל שלושה פרויקטים: <b>ירפא, כללית, מאוחדת</b>')
 await sleep(7000)
-await caption('הצבעים', 'אדום: לא התחיל · תכלת: בתהליך עבודה · ירוק: הסתיים. תא מקווקו הוא תת מודול שלא משויך לפרויקט')
-await sleep(6000)
+await caption('המסך הראשי', 'שורה לכל פרויקט, עמודה לכל תת מודול. לכל שלב צבע משלו, ובמבט אחד רואים באיזה שלב כל משימה נמצאת: כחול מנהל מוצר · סגול מוכנות קוד · כתום פיתוח AI · צהוב מפתח · ורוד QA · טורקיז בדיקה קצה לקצה · ירוק הסתיים · אפור לא התחיל')
+await sleep(8000)
 
 // real clicks on the first task
 const first = cells[0]
@@ -118,7 +118,7 @@ await caption('שלב 4: מפתח', 'שמעון בודק שהקוד שה-AI יצ
 await sleep(2500)
 await Promise.all(cells.filter((c) => c !== bad).map((c) => act(c, 'complete', 3)))
 await sleep(SETTLE + 1500)
-await caption('מצאו תקלה', 'בכללית / הכנסה לסל שמעון מצא תקלה ומחזיר ל-AI Dev עם הערה. התא נשאר תכלת וחוזר לשלב הקודם')
+await caption('מצאו תקלה', 'בכללית / הכנסה לסל שמעון מצא תקלה ומחזיר ל-AI Dev עם הערה. התא חוזר לשלב הקודם וצבעו משתנה בהתאם')
 await act(bad, 'back', 3, 'הקוד לא מטפל במרשם ללא מספר רופא')
 await sleep(SETTLE + 4500)
 await caption('התיקון', 'אדיר מריץ שוב את סוכן ה-AI, ושמעון בודק ומאשר')
@@ -126,14 +126,14 @@ await act(bad, 'complete', 2); await sleep(SETTLE + 1500)
 await act(bad, 'complete', 3); await sleep(SETTLE + 1500)
 
 // employee filter before QA
-await caption('מסנן לפי עובד', 'נחום בוחר את שמו ורואה בדשבורד רק את המשימות שממתינות לו. כל השאר מעומעמות')
+await caption('פקד העובדים', 'נחום בוחר את שמו בפקד "עובדים" ורואה בדשבורד רק את המשימות שממתינות לו. כל השאר מעומעמות')
 await page.selectOption('#who-filter', 'נחום'); await sleep(6500)
 await wave(4, 'שלב 5: QA', 'נחום מבצע את בדיקות ה-QA לכל תת מודול')
 await page.selectOption('#who-filter', ''); await sleep(800)
 await wave(5, 'שלב 6: בדיקה קצה לקצה לתת מודול', 'נחום בודק כל תת מודול מקצה לקצה. התא הופך ירוק רק אחרי שלב זה')
 
 // project-level end to end
-await caption('בדיקה קצה לקצה לפרויקט', 'כשכל תתי המודולים של פרויקט הסתיימו, נפתחת בעמודה האחרונה בדיקה של כל הפרויקט כמערכת אחת (תכלת)')
+await caption('בדיקה קצה לקצה לפרויקט', 'כשכל תתי המודולים של פרויקט הסתיימו, נפתחת בעמודה האחרונה בדיקה של כל הפרויקט כמערכת אחת (בצבע בדיקת הקצה לקצה)')
 await sleep(7000)
 const failing = cells.find((c) => c.name === 'מאוחדת')
 await caption('הבדיקה נכשלה', `במאוחדת נחום מוצא שאחד התתי מודולים לא מתחבר לסיום. הוא פותח מחדש את "${mod[failing.m]}" בשלב QA והאישור של הפרויקט מבוטל`)
@@ -162,6 +162,6 @@ await sleep(9000)
 }
 if (process.exitCode) process.exit(1)
 const rec = fs.readdirSync(path.join(HERE, 'rec')).filter((f) => f.endsWith('.webm')).map((f) => path.join(HERE, 'rec', f)).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0]
-const webm = path.join(OUT, 'parallel-3-projects-demo.webm')
+const webm = path.join(OUT, process.env.DEMO_NAME || 'parallel-3-projects-demo') + '.webm'
 fs.copyFileSync(rec, webm)
 console.log('video:', webm, (fs.statSync(webm).size / 1e6).toFixed(1) + ' MB')

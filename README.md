@@ -15,7 +15,18 @@ Manages the development flow of many projects, each with a subset of sub-modules
 
 A stage owner who finds a problem presses "return to the previous stage" with a note. A cell turns green only after stage 6.
 
-Colors: red = not started, light blue = in progress, green = done.
+Colors: each stage has its own color, so one look at the main screen shows where every sub-module is. A cell takes the color of the stage it is in; grey = not started, green = finished.
+
+| Stage | Color |
+|-------|-------|
+| Product | blue |
+| Code Readiness | violet |
+| AI Dev | orange |
+| Dev | yellow |
+| QA | pink |
+| End-to-end check | teal |
+
+The same colors fill the cells of the `ראשי` sheet in the workbook, which also has a legend. The colors are defined once, in `STAGES` in `dashboard/server.py`.
 
 ## Employees and task owners
 

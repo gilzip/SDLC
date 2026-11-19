@@ -28,17 +28,17 @@ ROLES = [
 ]
 ROLE_KEYS = [r["key"] for r in ROLES]
 STAGES = [
-    {"key": "pm", "name": "מנהל מוצר", "role": "pm", "done_label": "סיים איפיון",
+    {"key": "pm", "color": "BCD4FF", "name": "מנהל מוצר", "role": "pm", "done_label": "סיים איפיון",
      "hint": "מנהל המוצר מסיים את האיפיון"},
-    {"key": "readiness", "name": "מוכנות Source Code", "role": "readiness", "done_label": "ה-source code מוכן",
+    {"key": "readiness", "color": "D9C7FF", "name": "מוכנות Source Code", "role": "readiness", "done_label": "ה-source code מוכן",
      "hint": "בדיקה שה-source code של הפרויקט מוכן לפני הרצת סוכן ה-AI Dev (גישה, בנייה, סביבה)"},
-    {"key": "aidev", "name": "פיתוח AI", "role": "architect", "done_label": "פיתוח ה-AI הסתיים",
+    {"key": "aidev", "color": "FFD1A3", "name": "פיתוח AI", "role": "architect", "done_label": "פיתוח ה-AI הסתיים",
      "hint": "הארכיטקט אחראי על הרצת סוכן ה-AI Dev מחוץ למערכת. עדכן כשהוא סיים"},
-    {"key": "dev", "name": "מפתח", "role": "dev", "done_label": "הקוד נבדק ותקין",
+    {"key": "dev", "color": "FFF0A0", "name": "מפתח", "role": "dev", "done_label": "הקוד נבדק ותקין",
      "hint": "המתכנת בודק שהקוד שה-AI יצר עובד ותקין לפי הגדרת הצרכים"},
-    {"key": "qa", "name": "QA", "role": "qa", "done_label": "QA אישר",
+    {"key": "qa", "color": "FFC4E1", "name": "QA", "role": "qa", "done_label": "QA אישר",
      "hint": "בדיקות QA לתת המודול"},
-    {"key": "e2e", "name": "בדיקה קצה לקצה", "role": "qa", "done_label": "המודול נבדק ותקין קצה לקצה",
+    {"key": "e2e", "color": "A8E8E0", "name": "בדיקה קצה לקצה", "role": "qa", "done_label": "המודול נבדק ותקין קצה לקצה",
      "hint": "בדיקת כל השלבים של תת המודול מקצה לקצה"},
 ]
 N = len(STAGES)
@@ -80,7 +80,7 @@ STATE_HE = {"pend": "ממתין", "run": "בעבודה", "done": "הסתיים"}
 STATE_CODE = {v: k for k, v in STATE_HE.items()}
 STATE_CODE.update({"סוכן עובד": "run", "ממתין לאישור": "run", "אושר": "done"})  # labels from older files
 STATUS_HE = {"todo": "לא התחיל", "run": "בתהליך", "done": "הסתיים"}
-FILL = {"todo": "F4B4B4", "run": "A9E6F2", "done": "A6E3BF"}
+FILL = {"todo": "E1E6EC", "done": "A6E3BF"}  # not started / finished; a running cell takes its stage color
 ROLE_HE = {r["key"]: r["name"] for r in ROLES}
 ROLE_CODE = {r["name"]: r["key"] for r in ROLES}
 STATUS_COL = "סטטוס"
@@ -272,20 +272,25 @@ def save(d):
                 else:
                     owner = (c.get("owners") or default_owners(p))[cur]
                     row.append("%s: %s%s" % (STAGES[cur]["name"], STATE_HE[st[cur]], " (%s)" % owner if owner else ""))
-                fills.append(FILL[status])
+                fills.append(STAGES[cur]["color"] if cur is not None else FILL[status])
             else:
                 row.append("")
                 fills.append(None)
         e2e, n_done, n_all = project_e2e(d, p)
         row.append({"na": "", "todo": "ממתין לסיום תתי המודולים (%d/%d)" % (n_done, n_all),
                     "run": "ממתין לבדיקה קצה לקצה", "done": "מאושר לפרודקשיין"}[e2e])
-        fills.append({"na": None, "todo": FILL["todo"], "run": FILL["run"], "done": FILL["done"]}[e2e])
+        fills.append({"na": None, "todo": FILL["todo"], "run": STAGES[-1]["color"], "done": FILL["done"]}[e2e])
         ws.append(row)
         for i, f in enumerate(fills):
             if f:
                 c = ws.cell(row=ws.max_row, column=i + 2)
                 c.fill = PatternFill("solid", fgColor=f)
                 c.alignment = Alignment(horizontal="center")
+    ws.append([])
+    ws.append(["מקרא: צבע התא הוא צבע השלב שבו התת מודול נמצא"])
+    for label, col in [("לא התחיל", FILL["todo"])] + [("%s (%s)" % (st["name"], ROLE_HE[st["role"]]), st["color"]) for st in STAGES] + [("הסתיים", FILL["done"])]:
+        ws.append([label])
+        ws.cell(row=ws.max_row, column=1).fill = PatternFill("solid", fgColor=col)
     ws.append([])
     ws.append(["גיליון תצוגה בלבד, מתעדכן אוטומטית מהנתונים. הנתונים עצמם נשמרים בגיליונות פרויקטים, תת מודולים, שיוך, עובדים, הגדרות פרויקט ויומן ולא נמחקים."])
     ws.append(["לעריכה ידנית יש לערוך את הגיליונות האלה ולא את הגיליון הזה."])

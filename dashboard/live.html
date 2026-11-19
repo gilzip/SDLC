@@ -7,14 +7,14 @@
 <style>
 :root{
   --bg:#f3f6f9; --surface:#fff; --ink:#14202b; --muted:#5a6978; --line:#d6dee6; --accent:#2556d9;
-  --todo:#f4b4b4; --todo-ink:#7a1c1c; --run:#a9e6f2; --run-ink:#0b4a5a; --done:#a6e3bf; --done-ink:#0f5a35;
+  --todo:#e1e6ec; --todo-ink:#3d4a58; --stage-ink:#1b2733; --done:#a6e3bf; --done-ink:#0f5a35;
   --pip-off:rgba(0,0,0,.14); --pip-on:rgba(0,0,0,.55);
   --font:system-ui,-apple-system,'Segoe UI',Arial,sans-serif;
 }
 @media (prefers-color-scheme: dark){
   :root{
     --bg:#0e141a; --surface:#151d25; --ink:#e6ecf2; --muted:#92a1b0; --line:#2a3846; --accent:#7ba3ff;
-    --todo:#6b2a2a; --todo-ink:#ffd6d6; --run:#0f5566; --run-ink:#d3f6ff; --done:#17603b; --done-ink:#d6f7e5;
+    --todo:#2a3541; --todo-ink:#c3ced9; --stage-ink:#f3f6f9; --done:#17603b; --done-ink:#d6f7e5; --dark-mix:#0e141a;
     --pip-off:rgba(255,255,255,.2); --pip-on:rgba(255,255,255,.85); color-scheme:dark;
   }
 }
@@ -23,6 +23,7 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font);font
 header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:16px 20px}
 h1{margin:0;font-size:20px}
 .legend{display:flex;gap:14px;flex-wrap:wrap;align-items:center;color:var(--muted);font-size:13px}
+.lgi small{opacity:.75}
 .legend i{display:inline-block;width:14px;height:14px;border-radius:4px;vertical-align:-2px;margin-inline-end:5px}
 .bar{display:flex;gap:8px;flex-wrap:wrap}
 button{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:8px;padding:7px 12px}
@@ -48,7 +49,14 @@ td.e2ec{padding-inline-start:6px;border-inline-start:2px solid var(--line)}
 .c{display:block;width:100%;min-height:68px;border-radius:10px;border:0;padding:8px;text-align:center;cursor:pointer;
   display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px}
 .c.todo{background:var(--todo);color:var(--todo-ink)}
-.c.run{background:var(--run);color:var(--run-ink)}
+/* a cell takes the color of the stage it is in (--s0..--s5 come from the server). Dark mode darkens the same hue. */
+.c.st0,.stages li.st0,.lg0{background:var(--s0);color:var(--stage-ink)}
+.c.st1,.stages li.st1,.lg1{background:var(--s1);color:var(--stage-ink)}
+.c.st2,.stages li.st2,.lg2{background:var(--s2);color:var(--stage-ink)}
+.c.st3,.stages li.st3,.lg3{background:var(--s3);color:var(--stage-ink)}
+.c.st4,.stages li.st4,.lg4{background:var(--s4);color:var(--stage-ink)}
+.c.st5,.stages li.st5,.lg5{background:var(--s5);color:var(--stage-ink)}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .c[class*=" st"],:root:not([data-theme="light"]) .stages li[class*="st"]:not(.done){background:color-mix(in srgb,var(--sc,#888) 38%,var(--dark-mix))}}
 .c.done{background:var(--done);color:var(--done-ink)}
 .c:hover{filter:brightness(.96);outline:2px solid var(--accent)}
 .c .lbl{font-size:13px;font-weight:600}
@@ -87,7 +95,7 @@ input[type=text],textarea{width:100%;font:inherit;padding:8px 10px;border-radius
 .foot{display:flex;gap:8px;justify-content:space-between;margin-top:18px;flex-wrap:wrap}
 .stages{list-style:none;margin:14px 0;padding:0;display:grid;gap:8px}
 .stages li{flex-wrap:wrap;display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:10px;border:1px solid var(--line)}
-.stages li.run{background:var(--run);color:var(--run-ink);border-color:transparent}
+.stages li[class*="st"]{border-color:transparent}
 .stages .hint{font-size:12px;font-weight:400;opacity:.85}
 .stages li.done{background:var(--done);color:var(--done-ink);border-color:transparent}
 .stages .n{width:24px;height:24px;border-radius:50%;background:rgba(0,0,0,.12);display:grid;place-items:center;font-size:13px;font-weight:700}
@@ -103,7 +111,7 @@ input[type=text],textarea{width:100%;font:inherit;padding:8px 10px;border-radius
     <h1>לוח זרימת פיתוח</h1>
     <div class="legend">
       <span><i style="background:var(--todo)"></i>לא התחיל</span>
-      <span><i style="background:var(--run)"></i>בתהליך עבודה</span>
+      <span id="stagelegend"></span>
       <span><i style="background:var(--done)"></i>הסתיים</span>
       <span id="flow"></span>
     </div>
@@ -187,6 +195,8 @@ function renderFilter() {
 function render() {
   $('flow').textContent = 'זרימה: ' + S.stages.map(s => s.name).join(' ← ');
   renderFilter();
+  S.stages.forEach((s, i) => document.documentElement.style.setProperty('--s' + i, '#' + s.color));
+  $('stagelegend').innerHTML = S.stages.map((s, i) => `<span class="lgi"><i style="background:var(--s${i})"></i>${esc(s.name)} <small>(${esc(roleName(s.role))})</small></span>`).join('');
   if (!S.projects.length) { $('matrix').innerHTML = '<div class="empty">אין פרויקטים. הוסף פרויקט להתחלה.</div>'; renderOpen(); return; }
   let h = '<table><thead><tr><th></th>';
   for (const m of S.modules) h += `<th>${esc(m.name)}</th>`;
@@ -199,13 +209,14 @@ function render() {
       const i = cellInfo(c);
       const pips = c.stages.map((s, k) => `<b class="${s==='done'?'on':s==='run'?'cur':''}"></b>`).join('');
       const dim = filterEmail && !(i.cur >= 0 && c.owners[i.cur] === filterEmail) ? ' dim' : '';
-      h += `<td><button class="c ${c.status}${dim}" data-p="${p.id}" data-m="${m.id}"><span class="lbl">${esc(i.lbl)}</span><span class="pips">${pips}</span><span class="sub">${esc(i.sub)}</span></button></td>`;
+      const sc = i.cur >= 0 ? ' st' + i.cur : '';
+      h += `<td><button class="c ${i.cur >= 0 ? 'run' : c.status}${sc}${dim}" style="--sc:#${i.cur >= 0 ? S.stages[i.cur].color : ''}" data-p="${p.id}" data-m="${m.id}"><span class="lbl">${esc(i.lbl)}</span><span class="pips">${pips}</span><span class="sub">${esc(i.sub)}</span></button></td>`;
     }
     if (p.e2e === 'na') h += '<td class="e2ec"><span class="na" title="אין תתי מודולים"></span></td>';
     else {
       const t = {todo:['ממתין לסיום תתי המודולים', `${p.done}/${p.total}`], run:['ממתין לבדיקה קצה לקצה', `${p.total}/${p.total} הסתיימו`], done:['מאושר לפרודקשיין', 'נבדק קצה לקצה']}[p.e2e];
       const dimE = filterEmail && !(p.e2e === 'run' && p.owners.qa === filterEmail) ? ' dim' : '';
-      h += `<td class="e2ec"><button class="c ${p.e2e}${dimE}" data-e="${p.id}"><span class="lbl">${t[0]}</span><span class="sub">${t[1]}</span></button></td>`;
+      h += `<td class="e2ec"><button class="c ${p.e2e === 'run' ? 'run st' + (S.stages.length - 1) : p.e2e}${dimE}" style="--sc:#${S.stages[S.stages.length - 1].color}" data-e="${p.id}"><span class="lbl">${t[0]}</span><span class="sub">${t[1]}</span></button></td>`;
     }
     h += '</tr>';
   }
@@ -238,7 +249,7 @@ function renderCell() {
       act = `<button class="primary" data-a="complete" data-k="${k}">${esc(S.stages[k].done_label)}</button>`;
       if (k > 0) act += `<button class="danger" data-a="back" data-k="${k}">החזר ל${esc(S.stages[k-1].name)}</button>`;
     }
-    h += `<li class="${s}"><span class="n">${k+1}</span><span><b>${esc(S.stages[k].name)}</b>${s==='run' ? `<div class="hint">${esc(S.stages[k].hint)}</div>` : ''}</span><span class="st">${STATE_HE[s]}</span>${ownerSelect(S.stages[k].role, c.owners[k], k)}${act}</li>`;
+    h += `<li class="${s === 'run' ? 'run st' + k : s}" style="--sc:#${S.stages[k].color}"><span class="n">${k+1}</span><span><b>${esc(S.stages[k].name)}</b>${s==='run' ? `<div class="hint">${esc(S.stages[k].hint)}</div>` : ''}</span><span class="st">${STATE_HE[s]}</span>${ownerSelect(S.stages[k].role, c.owners[k], k)}${act}</li>`;
   });
   h += '</ul>';
   h += `<label for="who">שם בעל התפקיד</label><input type="text" id="who" value="${esc(who)}" placeholder="למשל: דנה, מנהלת מוצר">`;
@@ -288,7 +299,8 @@ function renderE2E() {
   let h = `<h2>${esc(p.name)} · בדיקה קצה לקצה לפרויקט</h2><div class="muted">נפתחת רק אחרי שכל תתי המודולים של הפרויקט סיימו את כל שלביהם, כולל הבדיקה קצה לקצה שלהם. האישור ידני. אם נמצאה תקלה, פתח מחדש את תת המודול הרלוונטי בשלב המתאים.</div><ul class="stages">`;
   for (const m of mods) {
     const c = S.cells[p.id + ':' + m.id];
-    h += `<li class="${c.status==='done'?'done':c.status==='run'?'run':''}" data-m="${m.id}"><span class="n">${c.stages.filter(s=>s==='done').length}</span><b>${esc(m.name)}</b><span class="st">${c.status==='done'?'הסתיים':c.status==='run'?'בעבודה':'לא התחיל'}</span>`;
+    const cs = c.stages.findIndex(x => x === 'run');
+    h += `<li class="${c.status==='done'?'done':cs>=0?'run st'+cs:''}" style="--sc:#${cs>=0?S.stages[cs].color:''}" data-m="${m.id}"><span class="n">${c.stages.filter(s=>s==='done').length}</span><b>${esc(m.name)}</b><span class="st">${c.status==='done'?'הסתיים':c.status==='run'?'בעבודה':'לא התחיל'}</span>`;
     if (c.status === 'done') h += `<select>${S.stages.map((s,k)=>`<option value="${k}">${esc(s.name)}</option>`).join('')}</select><button class="danger" data-reopen>פתח מחדש</button>`;
     h += '</li>';
   }
