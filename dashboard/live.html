@@ -36,6 +36,8 @@ th{font-weight:600;font-size:14px;padding:8px 6px;text-align:center;vertical-ali
 th.rowh{text-align:start;white-space:nowrap;min-width:130px}
 th .ed{opacity:.5;border:0;background:none;padding:0 4px;font-size:13px}
 th .ed:hover{opacity:1}
+.banner{margin:0 20px 10px;padding:10px 14px;border-radius:10px;background:#fdf0d5;color:#6b4300;border:1px solid #e8b24a;font-size:14px}
+.banner[hidden]{display:none}
 td{padding:0}
 .c.dim{opacity:.25}
 #who-filter{font:inherit;padding:7px 10px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink)}
@@ -101,6 +103,7 @@ input[type=text],textarea{width:100%;font:inherit;padding:8px 10px;border-radius
     <button id="manageEmps">עובדים</button>
   </div>
 </header>
+<div id="banner" class="banner" role="alert" hidden></div>
 <main><div id="matrix"></div></main>
 
 <dialog id="dCell"></dialog>
@@ -121,12 +124,19 @@ async function api(path, body) {
   await refresh(true);
 }
 
+function showBanner(msg) {
+  const b = $('banner'); b.textContent = msg; b.hidden = !msg;
+}
+
 async function refresh(force) {
   try {
-    const t = await (await fetch('/api/state')).text();
+    const r = await fetch('/api/state');
+    const t = await r.text();
+    if (!r.ok) { showBanner((JSON.parse(t || '{}').error) || 'השרת לא זמין'); return; }
+    showBanner('');
     if (!force && t === lastJson) return;
     lastJson = t; S = JSON.parse(t); render();
-  } catch (e) {}
+  } catch (e) { showBanner('אין חיבור לשרת'); }
 }
 
 const empName = key => S.employees.some(e => e.name === key) ? key : '';  // owners are stored by employee name

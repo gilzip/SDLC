@@ -508,8 +508,11 @@ class Handler(BaseHTTPRequestHandler):
             with open(os.path.join(HERE, "live.html"), "rb") as f:
                 self.send(200, f.read(), "text/html; charset=utf-8")
         elif path == "/api/state":
-            with LOCK, file_lock():
-                self.send(200, json.dumps(view(load()), ensure_ascii=False))
+            try:
+                with LOCK, file_lock():
+                    self.send(200, json.dumps(view(load()), ensure_ascii=False))
+            except PermissionError:  # workbook held open exclusively (for example by Excel)
+                self.send(409, json.dumps({"error": "קובץ האקסל פתוח ונעול. סגור אותו ונסה שוב"}, ensure_ascii=False))
         else:
             self.send(404, "not found", "text/plain")
 
