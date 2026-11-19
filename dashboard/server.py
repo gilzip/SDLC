@@ -151,13 +151,21 @@ def load():
     rows = lambda name: [r for r in wb[name].iter_rows(min_row=2, values_only=True) if r and r[0]] if name in wb.sheetnames else []
     cellv = lambda r, i: (r[i] if len(r) > i and r[i] is not None else "")
     d = {"modules": [{"id": str(r[0]), "name": str(r[1])} for r in rows(SH_MODULES)],
-         "employees": [{"name": str(r[0]), "email": str(r[1] or "").strip().lower(), "role": ROLE_CODE.get(r[2], "pm")}
-                       for r in rows(SH_EMP) if r[1]],
+         "employees": [{"name": str(r[0]).strip(), "email": str(r[1] or "").strip(), "role": ROLE_CODE.get(r[2], "pm")}
+                       for r in rows(SH_EMP)],
          "projects": [], "cells": {}}
+
+    def owner(v):
+        """Owners are stored by employee name. Files from the earlier version stored the email: map it to the name."""
+        v = str(v or "").strip()
+        if v and not any(e["name"] == v for e in d["employees"]):
+            v = next((e["name"] for e in d["employees"] if e["email"].lower() == v.lower()), v)
+        return v
+
     for r in rows(SH_PROJECTS):
         p = new_project(str(r[1]))
         p.update(id=str(r[0]), e2e=cellv(r, 2) == E2E_DONE_HE, e2e_by=cellv(r, 3), e2e_ts=cellv(r, 4) or 0)
-        p["owners"] = {k: str(cellv(r, 5 + i)).strip().lower() for i, k in enumerate(ROLE_KEYS)}
+        p["owners"] = {k: owner(cellv(r, 5 + i)) for i, k in enumerate(ROLE_KEYS)}
         d["projects"].append(p)
     byid = {p["id"]: p for p in d["projects"]}
     # assignment row: project id, project, module id, module, <stage states>, status, <stage owners>
@@ -174,7 +182,7 @@ def load():
             first = next((i for i, s in enumerate(st) if s != "done"), None)
             if first is not None and first > 0 and st[first] == "pend":
                 st[first] = "run"
-            owners = [str(cellv(r, status_idx + 1 + i)).strip().lower() for i in range(N)]
+            owners = [owner(cellv(r, status_idx + 1 + i)) for i in range(N)]
             if not any(owners):
                 owners = default_owners(byid[pid])
             d["cells"][pid + ":" + mid] = {"stages": st, "log": [], "owners": owners}
@@ -208,7 +216,6 @@ def save(d):
         wb = Workbook()
         wb.remove(wb.active)
     mname = {m["id"]: m["name"] for m in d["modules"]}
-    ename = {e["email"]: e["name"] for e in d["employees"]}
 
     ws = fresh(wb, SH_MAIN, ["פרויקט"] + [m["name"] for m in d["modules"]] + ["בדיקה קצה לקצה (פרויקט)"], 0)
     for p in d["projects"]:
@@ -223,7 +230,7 @@ def save(d):
                 if cur is None:
                     row.append(STATUS_HE[status])
                 else:
-                    owner = ename.get((c.get("owners") or default_owners(p))[cur], "")
+                    owner = (c.get("owners") or default_owners(p))[cur]
                     row.append("%s: %s%s" % (STAGES[cur]["name"], STATE_HE[st[cur]], " (%s)" % owner if owner else ""))
                 fills.append(FILL[status])
             else:
@@ -231,7 +238,7 @@ def save(d):
                 fills.append(None)
         e2e, n_done, n_all = project_e2e(d, p)
         row.append({"na": "", "todo": "ממתין לסיום תתי המודולים (%d/%d)" % (n_done, n_all),
-                    "run": "ממתין לבדיקה קצה לקצה", "done": "הסתיים"}[e2e])
+                    "run": "ממתין לבדיקה קצה לקצה", "done": "מאושר לפרודקשיין"}[e2e])
         fills.append({"na": None, "todo": FILL["todo"], "run": FILL["run"], "done": FILL["done"]}[e2e])
         ws.append(row)
         for i, f in enumerate(fills):
@@ -244,7 +251,7 @@ def save(d):
     ws.append(["לעריכה ידנית יש לערוך את הגיליונות האלה ולא את הגיליון הזה."])
 
     ws = fresh(wb, SH_PROJECTS, ["מזהה", "שם", "בדיקה קצה לקצה (פרויקט)", "אושר על ידי", "זמן אישור (unix)"]
-               + ["ברירת מחדל: " + r["name"] + " (אימייל)" for r in ROLES], 1)
+               + ["ברירת מחדל: " + r["name"] + " (שם עובד)" for r in ROLES], 1)
     for p in d["projects"]:
         ws.append([p["id"], p["name"], E2E_DONE_HE if p.get("e2e") else "", p.get("e2e_by", ""), p.get("e2e_ts", 0) or ""]
                   + [p.get("owners", {}).get(k, "") for k in ROLE_KEYS])
@@ -255,7 +262,7 @@ def save(d):
     for m in d["modules"]:
         ws.append([m["id"], m["name"]])
     ws = fresh(wb, SH_ASSIGN, ["מזהה פרויקט", "פרויקט", "מזהה תת מודול", "תת מודול"] + [s["name"] for s in STAGES]
-               + [STATUS_COL] + ["אחראי: " + s["name"] + " (אימייל)" for s in STAGES], 4)
+               + [STATUS_COL] + ["אחראי: " + s["name"] + " (שם עובד)" for s in STAGES], 4)
     lg = fresh(wb, SH_LOG, ["מזהה פרויקט", "מזהה תת מודול", "זמן (unix)", "הודעה", "זמן"], 5)
     for p in d["projects"]:
         for l in p.get("plog", []):
@@ -362,14 +369,14 @@ def cell_action(d, pid, mid, action, stage, who, note):
         raise ValueError("unknown action")
 
 
-def employee_of(d, email):
-    email = (email or "").strip().lower()
-    if email and not any(e["email"] == email for e in d["employees"]):
+def employee_of(d, key):
+    key = (key or "").strip()
+    if key and not any(e["name"] == key for e in d["employees"]):
         raise ValueError("no such employee")
-    return email
+    return key
 
 
-def replace_email(d, old, new):
+def replace_owner(d, old, new):
     """Re-point every reference to an employee (task owners, project defaults); new may be empty to clear."""
     for p in d["projects"]:
         for k, v in p.get("owners", {}).items():
@@ -422,40 +429,39 @@ def handle(d, path, body):
                 p["modules"].remove(mid)
         d["cells"] = {k: v for k, v in d["cells"].items() if not k.endswith(":" + mid)}
     elif path == "/api/employee":
-        email = str(body.get("email", "")).strip().lower()
+        # employees are identified by name; several employees may share one email
+        email = str(body.get("email", "")).strip()
         if not name or "@" not in email or " " in email:
             raise ValueError("שם וכתובת מייל תקינה נדרשים")
         if body.get("role") not in ROLE_KEYS:
             raise ValueError("תפקיד לא תקין")
-        if any(e["email"] == email for e in d["employees"]):
-            raise ValueError("כתובת המייל כבר קיימת")
+        if any(e["name"] == name for e in d["employees"]):
+            raise ValueError("עובד בשם הזה כבר קיים")
         d["employees"].append({"name": name, "email": email, "role": body["role"]})
     elif path == "/api/employee/update":
-        e = next(e for e in d["employees"] if e["email"] == str(body["email"]).strip().lower())
-        new_email = str(body.get("new_email", e["email"])).strip().lower()
-        if "@" not in new_email or " " in new_email:
+        e = next(e for e in d["employees"] if e["name"] == str(body["key"]).strip())
+        email = str(body.get("email", e["email"])).strip()
+        if "@" not in email or " " in email:
             raise ValueError("כתובת מייל לא תקינה")
-        if new_email != e["email"] and any(x["email"] == new_email for x in d["employees"]):
-            raise ValueError("כתובת המייל כבר קיימת")
-        if name:
+        if name and name != e["name"]:
+            if any(x["name"] == name for x in d["employees"]):
+                raise ValueError("עובד בשם הזה כבר קיים")
+            replace_owner(d, e["name"], name)
             e["name"] = name
+        e["email"] = email
         if body.get("role") in ROLE_KEYS:
             e["role"] = body["role"]
-        if new_email != e["email"]:
-            replace_email(d, e["email"], new_email)
-            e["email"] = new_email
     elif path == "/api/employee/delete":
-        email = str(body["email"]).strip().lower()
-        d["employees"] = [e for e in d["employees"] if e["email"] != email]
-        replace_email(d, email, "")
+        key = str(body["key"]).strip()
+        d["employees"] = [e for e in d["employees"] if e["name"] != key]
+        replace_owner(d, key, "")
     elif path == "/api/cell/assign":
         pid, mid, stage = body["project"], body["module"], int(body["stage"])
         if not any(p["id"] == pid and mid in p["modules"] for p in d["projects"]) or not 0 <= stage < N:
             raise ValueError("no such task")
         c = cell(d, pid, mid)
         c["owners"][stage] = employee_of(d, body.get("employee", ""))
-        who = next((e["name"] for e in d["employees"] if e["email"] == c["owners"][stage]), "ללא אחראי")
-        log(c, "אחראי לשלב %s: %s" % (STAGES[stage]["name"], who))
+        log(c, "אחראי לשלב %s: %s" % (STAGES[stage]["name"], c["owners"][stage] or "ללא אחראי"))
     elif path == "/api/cell":
         cell_action(d, body["project"], body["module"], str(body["action"]), int(body.get("stage", 0)),
                     str(body.get("who", ""))[:60], str(body.get("note", ""))[:500])
@@ -466,7 +472,7 @@ def handle(d, path, body):
             raise ValueError("all sub-modules must be finished first")
         who = str(body.get("who", ""))[:60]
         p["e2e"], p["e2e_by"], p["e2e_ts"] = True, who, time.time()
-        p.setdefault("plog", []).insert(0, {"ts": time.time(), "m": "%sהפרויקט נבדק ותקין קצה לקצה" % ((who + " — ") if who else "")})
+        p.setdefault("plog", []).insert(0, {"ts": time.time(), "m": "%sהפרויקט נבדק ותקין קצה לקצה, מאושר להעלאה לפרודקשיין" % ((who + " — ") if who else "")})
     else:
         raise KeyError(path)
     normalize(d)

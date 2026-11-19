@@ -18,7 +18,7 @@ Colors: red = not started, light blue = in progress, green = done.
 
 ## Employees and task owners
 
-Every stage of every cell is assigned to an employee. Employees live in the `עובדים` sheet (name, email, role) and are managed from the "עובדים" button. Email is the unique key.
+Every stage of every cell is assigned to an employee. Employees live in the `עובדים` sheet (name, email, role) and are managed from the "עובדים" button. Employees are identified by name, so several employees can share one email.
 
 | Role | Responsible for |
 |------|-----------------|
