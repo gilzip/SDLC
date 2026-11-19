@@ -1,124 +1,294 @@
-"""Live SDLC run desk: serves live.html and a JSON view of a feature's .ai/work folder.
+"""SDLC flow desk: manages the development flow of many projects x sub-modules.
 
-Usage: python server.py --repo C:\\vendure\\my-shop --feature back-in-stock-waitlist [--port 8765]
+Usage: python server.py [--port 8765] [--host 0.0.0.0] [--data data.xlsx]
 
-The page polls /api/state. State comes from the real files the agents write, plus
-pipeline-state.json (stage statuses and run log, written by sdlc_state.py).
-Approve / request-changes clicks are appended to decisions.jsonl in the feature folder.
+Flow per (project, sub-module) cell: Product Manager -> AI Development -> Developer -> QA.
+Each agent finishes its work ("ready"), a human owner approves manually, and only then
+does the next stage start. All data lives in one Excel workbook (the database); the page polls /api/state.
+Sheets: ראשי (colored status matrix), פרויקטים, תת מודולים, שיוך (project x module + stage states), יומן.
+Never reset: only a missing file is seeded. Reads/writes are serialized by a thread lock and a lock file.
 """
-import argparse, json, os, subprocess, sys, time
+import argparse, json, os, threading, time, uuid
+from contextlib import contextmanager
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import PatternFill, Font, Alignment
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-STAGE_FILES = [
-    ["business-requirement.md"],
-    ["technical-discovery.md", "epic.md", "stories.md"],
-    ["architecture.md"],
-    ["implementation.md"],
-    ["schema-execution.md"],
-    ["review.md"],
+STAGES = [
+    {"key": "pm", "name": "מנהל מוצר"},
+    {"key": "aidev", "name": "פיתוח AI"},
+    {"key": "dev", "name": "מפתח"},
+    {"key": "qa", "name": "QA"},
 ]
-SKIP_PREFIXES = (".ai/", ".claude/", "Claude outputs/", "node_modules/", "dist/")
-SKIP_SUFFIXES = (".sqlite", ".sqlite3", ".log")
-MAX_LINES = 400
+N = len(STAGES)
+LOCK = threading.Lock()
+DATA_PATH = os.path.join(HERE, "data.xlsx")
+
+SEED_MODULES = ["קליטת מרשם", "הכנסה לסל", "חלופה גנרית", "סיום ניפוק"]
+# project -> number of modules (the first N); smaller projects get only part of the modules
+SEED_PROJECTS = [
+    ("ירפא", 4), ("פורמידבל", 4), ("כללית", 4), ("מאוחדת", 3), ("לאומית", 3),
+    ("יקר", 2), ("משרד הבטחון", 2), ("צה\"ל", 2), ("ממשק לרובוט", 1),
+]
 
 
-def rd(path):
-    try:
-        with open(path, encoding="utf-8") as f:
-            return f.read()
-    except OSError:
-        return None
+def uid():
+    return uuid.uuid4().hex[:8]
 
 
-def git(repo, *args):
-    r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
-    return r.stdout
+def seed():
+    mods = [{"id": uid(), "name": n} for n in SEED_MODULES]
+    projects = [{"id": uid(), "name": n, "modules": [m["id"] for m in mods[:k]]} for n, k in SEED_PROJECTS]
+    return {"modules": mods, "projects": projects, "cells": {}}
 
 
-def clip(text):
-    lines = text.split("\n")
-    if len(lines) > MAX_LINES:
-        return "\n".join(lines[:MAX_LINES]) + "\n... (%d more lines)" % (len(lines) - MAX_LINES)
-    return text
+SH_MAIN, SH_PROJECTS, SH_MODULES, SH_ASSIGN, SH_LOG = "ראשי", "פרויקטים", "תת מודולים", "שיוך", "יומן"
+LEGACY_FLOW = "זרם"  # sheet name used by an earlier version of the file
+STATE_HE = {"pend": "ממתין", "run": "סוכן עובד", "wait": "ממתין לאישור", "done": "אושר"}
+STATE_CODE = {v: k for k, v in STATE_HE.items()}
+STATUS_HE = {"todo": "לא התחיל", "run": "בתהליך", "done": "הסתיים"}
+FILL = {"todo": "F4B4B4", "run": "A9E6F2", "done": "A6E3BF"}
 
 
-def lang(path):
-    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
-    return {"ts": "ts", "tsx": "tsx", "js": "js", "json": "json", "md": "md", "graphql": "graphql"}.get(ext, "")
-
-
-def code_changes(repo):
-    """Changed files in the repo as markdown blocks: (path, markdown). Excludes docs, skills and local data."""
-    out = []
-    for line in git(repo, "status", "--porcelain", "-uall").split("\n"):
-        if len(line) < 4:
-            continue
-        flag, path = line[:2], line[3:].strip().strip('"')
-        if path.startswith(SKIP_PREFIXES) or path.endswith(SKIP_SUFFIXES):
-            continue
-        if "?" in flag or "A" in flag:
-            body = rd(os.path.join(repo, path))
-            if body is None:
-                continue
-            out.append((path, "*New file*\n\n```%s\n%s\n```" % (lang(path), clip(body))))
-        else:
-            diff = git(repo, "diff", "HEAD", "--", path)
-            out.append((path, "*Modified file*\n\n```diff\n%s\n```" % clip(diff)))
-    return out
-
-
-def build_state(repo, feature):
-    wdir = os.path.join(repo, ".ai", "work", feature)
-    state = {}
-    raw = rd(os.path.join(wdir, "pipeline-state.json"))
-    if raw:
+@contextmanager
+def file_lock(timeout=15, stale=60):
+    """Cross-process lock so several server processes can share one workbook."""
+    path = DATA_PATH + ".lock"
+    end = time.time() + timeout
+    while True:
         try:
-            state = json.loads(raw)
-        except ValueError:
-            pass
-    state.setdefault("feature", feature)
-    state.setdefault("stages", ["pend"] * 6)
-    state.setdefault("log", [])
-    changes = code_changes(repo)
-    stage_files = []
-    for i, names in enumerate(STAGE_FILES):
-        files = []
-        for n in names:
-            body = rd(os.path.join(wdir, n))
-            if body is not None:
-                files.append({"name": n, "md": body})
-        if i == 3:
-            for path, md in changes:
-                if "/migrations/" not in path:
-                    files.append({"name": path, "md": md, "code": True})
-        if i == 4:
-            for path, md in changes:
-                if "/migrations/" in path:
-                    files.append({"name": path, "md": md, "code": True})
-        stage_files.append(files)
-    decisions = []
-    raw = rd(os.path.join(wdir, "decisions.jsonl")) or ""
-    for ln in raw.split("\n"):
-        if ln.strip():
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+            break
+        except FileExistsError:
             try:
-                decisions.append(json.loads(ln))
-            except ValueError:
+                if time.time() - os.path.getmtime(path) > stale:
+                    os.remove(path)
+                    continue
+            except OSError:
                 pass
-    state["files"] = stage_files
-    state["decisions"] = decisions
-    state["changedCount"] = len(changes)
-    return state
+            if time.time() > end:
+                raise PermissionError("lock timeout")
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def status_of(st):
+    return "done" if all(s == "done" for s in st) else "todo" if all(s == "pend" for s in st) else "run"
+
+
+def load():
+    """Reads the workbook. Only a missing file is seeded; any other failure raises, never resets data."""
+    try:
+        wb = load_workbook(DATA_PATH)
+    except FileNotFoundError:
+        d = seed()
+        save(d)
+        return d
+    rows = lambda name: [r for r in wb[name].iter_rows(min_row=2, values_only=True) if r and r[0]] if name in wb.sheetnames else []
+    d = {"modules": [{"id": str(r[0]), "name": str(r[1])} for r in rows(SH_MODULES)],
+         "projects": [{"id": str(r[0]), "name": str(r[1]), "modules": []} for r in rows(SH_PROJECTS)],
+         "cells": {}}
+    byid = {p["id"]: p for p in d["projects"]}
+    # assignment row: project id, project, module id, module, <4 stage states>, status
+    for r in rows(SH_ASSIGN) or rows(LEGACY_FLOW):
+        pid, mid = str(r[0]), str(r[2])
+        if pid in byid and mid not in byid[pid]["modules"]:
+            byid[pid]["modules"].append(mid)
+            d["cells"][pid + ":" + mid] = {"stages": [STATE_CODE.get(r[4 + i], "pend") for i in range(N)], "log": []}
+    for r in rows(SH_LOG):
+        c = d["cells"].get(str(r[0]) + ":" + str(r[1]))
+        if c is not None:
+            c["log"].append({"ts": float(r[2]), "m": str(r[3])})
+    return d
+
+
+def fresh(wb, name, header, idx):
+    if name in wb.sheetnames:
+        del wb[name]
+    ws = wb.create_sheet(name, idx)
+    ws.append(header)
+    for c in ws[1]:
+        c.font = Font(bold=True)
+    return ws
+
+
+def save(d):
+    # keep the existing workbook (and any extra sheets people added), rewrite only ours
+    try:
+        wb = load_workbook(DATA_PATH)
+    except FileNotFoundError:
+        wb = Workbook()
+        wb.remove(wb.active)
+    mname = {m["id"]: m["name"] for m in d["modules"]}
+
+    ws = fresh(wb, SH_MAIN, ["פרויקט"] + [m["name"] for m in d["modules"]], 0)
+    for p in d["projects"]:
+        row = [p["name"]]
+        fills = []
+        for m in d["modules"]:
+            if m["id"] in p["modules"]:
+                st = d["cells"].get(p["id"] + ":" + m["id"], {"stages": ["pend"] * N})["stages"]
+                status = status_of(st)
+                cur = next((i for i, s in enumerate(st) if s in ("run", "wait")), None)
+                row.append(STATUS_HE[status] if cur is None else "%s: %s" % (STAGES[cur]["name"], STATE_HE[st[cur]]))
+                fills.append(FILL[status])
+            else:
+                row.append("")
+                fills.append(None)
+        ws.append(row)
+        for i, f in enumerate(fills):
+            if f:
+                c = ws.cell(row=ws.max_row, column=i + 2)
+                c.fill = PatternFill("solid", fgColor=f)
+                c.alignment = Alignment(horizontal="center")
+    ws.append([])
+    ws.append(["גיליון זה נבנה מחדש בכל שמירה. עריכה ידנית מתבצעת בגיליונות פרויקטים, תת מודולים ושיוך."])
+
+    ws = fresh(wb, SH_PROJECTS, ["מזהה", "שם"], 1)
+    for p in d["projects"]:
+        ws.append([p["id"], p["name"]])
+    ws = fresh(wb, SH_MODULES, ["מזהה", "שם"], 2)
+    for m in d["modules"]:
+        ws.append([m["id"], m["name"]])
+    ws = fresh(wb, SH_ASSIGN, ["מזהה פרויקט", "פרויקט", "מזהה תת מודול", "תת מודול"] + [s["name"] for s in STAGES] + ["סטטוס"], 3)
+    lg = fresh(wb, SH_LOG, ["מזהה פרויקט", "מזהה תת מודול", "זמן (unix)", "הודעה", "זמן"], 4)
+    for p in d["projects"]:
+        for mid in p["modules"]:
+            c = d["cells"].get(p["id"] + ":" + mid, {"stages": ["pend"] * N, "log": []})
+            ws.append([p["id"], p["name"], mid, mname.get(mid, "")] + [STATE_HE[s] for s in c["stages"]] + [STATUS_HE[status_of(c["stages"])]])
+            for l in c["log"]:
+                lg.append([p["id"], mid, l["ts"], l["m"], time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(l["ts"]))])
+    if LEGACY_FLOW in wb.sheetnames:
+        del wb[LEGACY_FLOW]
+    for w in wb.worksheets:
+        w.sheet_view.rightToLeft = True
+        for col in w.columns:
+            w.column_dimensions[col[0].column_letter].width = max(12, min(48, max(len(str(c.value or "")) for c in col[:60]) + 2))
+    tmp = DATA_PATH + ".tmp"
+    try:
+        wb.save(tmp)
+        os.replace(tmp, DATA_PATH)
+    except OSError:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise PermissionError("workbook locked")
+
+
+def cell(d, pid, mid):
+    return d["cells"].setdefault(pid + ":" + mid, {"stages": ["pend"] * N, "log": []})
+
+
+def log(c, msg):
+    c["log"].insert(0, {"ts": time.time(), "m": msg})
+    c["log"] = c["log"][:40]
+
+
+def view(d):
+    cells = {}
+    for p in d["projects"]:
+        for mid in p["modules"]:
+            c = d["cells"].get(p["id"] + ":" + mid, {"stages": ["pend"] * N, "log": []})
+            st = c["stages"]
+            status = status_of(st)
+            cells[p["id"] + ":" + mid] = {"stages": st, "log": c["log"], "status": status}
+    return {"stages": STAGES, "modules": d["modules"], "projects": d["projects"], "cells": cells}
+
+
+def cell_action(d, pid, mid, action, stage, who, note):
+    if not any(p["id"] == pid and mid in p["modules"] for p in d["projects"]):
+        raise ValueError("no such cell")
+    if not 0 <= stage < N:
+        raise ValueError("bad stage")
+    c = cell(d, pid, mid)
+    st = c["stages"]
+    by = (who + " — ") if who else ""
+    if action == "start":
+        if any(s != "pend" for s in st):
+            raise ValueError("already started")
+        st[0] = "run"
+        log(c, "%sהזרם התחיל, סוכן %s עובד" % (by, STAGES[0]["name"]))
+    elif action == "ready":
+        if st[stage] != "run":
+            raise ValueError("stage not running")
+        st[stage] = "wait"
+        log(c, "סוכן %s סיים, ממתין לאישור" % STAGES[stage]["name"])
+    elif action == "approve":
+        if st[stage] != "wait":
+            raise ValueError("stage not awaiting approval")
+        st[stage] = "done"
+        log(c, "%sאישר סיום שלב %s" % (by, STAGES[stage]["name"]))
+        if stage + 1 < N:
+            st[stage + 1] = "run"
+            log(c, "הועבר לסוכן %s" % STAGES[stage + 1]["name"])
+        else:
+            log(c, "הזרם הושלם")
+    elif action == "reject":
+        if st[stage] != "wait":
+            raise ValueError("stage not awaiting approval")
+        st[stage] = "run"
+        log(c, "%sהוחזר לסוכן %s לתיקון: %s" % (by, STAGES[stage]["name"], note))
+    elif action == "reset":
+        c["stages"] = ["pend"] * N
+        log(c, "%sהזרם אופס" % by)
+    else:
+        raise ValueError("unknown action")
+
+
+def handle(d, path, body):
+    """Mutates d. Raises ValueError for bad requests, KeyError for unknown paths."""
+    name = str(body.get("name", "")).strip()[:80]
+    if path == "/api/project":
+        if not name:
+            raise ValueError("name required")
+        d["projects"].append({"id": uid(), "name": name, "modules": []})
+    elif path == "/api/project/update":
+        p = next(p for p in d["projects"] if p["id"] == body["id"])
+        if name:
+            p["name"] = name
+        if "modules" in body:
+            valid = {m["id"] for m in d["modules"]}
+            new = [m for m in d["modules"] if m["id"] in body["modules"]]  # keep module order
+            for gone in set(p["modules"]) - {m["id"] for m in new}:
+                d["cells"].pop(p["id"] + ":" + gone, None)
+            p["modules"] = [m["id"] for m in new if m["id"] in valid]
+    elif path == "/api/project/delete":
+        d["projects"] = [p for p in d["projects"] if p["id"] != body["id"]]
+        d["cells"] = {k: v for k, v in d["cells"].items() if not k.startswith(body["id"] + ":")}
+    elif path == "/api/module":
+        if not name:
+            raise ValueError("name required")
+        d["modules"].append({"id": uid(), "name": name})
+    elif path == "/api/module/update":
+        m = next(m for m in d["modules"] if m["id"] == body["id"])
+        if name:
+            m["name"] = name
+    elif path == "/api/module/delete":
+        mid = body["id"]
+        d["modules"] = [m for m in d["modules"] if m["id"] != mid]
+        for p in d["projects"]:
+            if mid in p["modules"]:
+                p["modules"].remove(mid)
+        d["cells"] = {k: v for k, v in d["cells"].items() if not k.endswith(":" + mid)}
+    elif path == "/api/cell":
+        cell_action(d, body["project"], body["module"], str(body["action"]), int(body.get("stage", 0)),
+                    str(body.get("who", ""))[:60], str(body.get("note", ""))[:500])
+    else:
+        raise KeyError(path)
 
 
 class Handler(BaseHTTPRequestHandler):
-    repo = ""
-    feature = ""
-
     def log_message(self, *a):
         pass
 
-    def send(self, code, body, ctype):
+    def send(self, code, body, ctype="application/json; charset=utf-8"):
         data = body if isinstance(body, bytes) else body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -130,39 +300,39 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
         if path in ("/", "/index.html"):
-            self.send(200, open(os.path.join(HERE, "live.html"), "rb").read(), "text/html; charset=utf-8")
+            with open(os.path.join(HERE, "live.html"), "rb") as f:
+                self.send(200, f.read(), "text/html; charset=utf-8")
         elif path == "/api/state":
-            self.send(200, json.dumps(build_state(self.repo, self.feature), ensure_ascii=False), "application/json; charset=utf-8")
+            with LOCK, file_lock():
+                self.send(200, json.dumps(view(load()), ensure_ascii=False))
         else:
             self.send(404, "not found", "text/plain")
 
     def do_POST(self):
-        if self.path != "/api/decision":
-            self.send(404, "not found", "text/plain")
-            return
-        n = int(self.headers.get("Content-Length") or 0)
+        path = self.path.split("?")[0]
         try:
-            d = json.loads(self.rfile.read(n) or b"{}")
-            stage, action = int(d["stage"]), str(d["action"])
-            assert action in ("approve", "changes", "send-back")
-        except Exception:
-            self.send(400, "bad request", "text/plain")
-            return
-        rec = {"ts": time.time(), "stage": stage, "action": action, "note": str(d.get("note", ""))[:2000], "via": "dashboard"}
-        wdir = os.path.join(self.repo, ".ai", "work", self.feature)
-        os.makedirs(wdir, exist_ok=True)
-        with open(os.path.join(wdir, "decisions.jsonl"), "a", encoding="utf-8") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        self.send(200, "{}", "application/json")
+            n = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(n) or b"{}")
+            with LOCK, file_lock():
+                d = load()
+                handle(d, path, body)
+                save(d)
+            self.send(200, "{}")
+        except KeyError:
+            self.send(400, json.dumps({"error": "bad request"}))
+        except (ValueError, StopIteration, TypeError) as e:
+            self.send(400, json.dumps({"error": str(e) or "bad request"}, ensure_ascii=False))
+        except PermissionError:
+            self.send(409, json.dumps({"error": "קובץ האקסל פתוח ונעול. סגור אותו ונסה שוב"}, ensure_ascii=False))
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--repo", required=True)
-    ap.add_argument("--feature", required=True)
     ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--data", default=DATA_PATH)
+    ap.add_argument("--host", default="127.0.0.1", help="use 0.0.0.0 to let other users on the network connect")
     a = ap.parse_args()
-    Handler.repo, Handler.feature = a.repo, a.feature
-    srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
-    print("SDLC run desk on http://localhost:%d  (feature %s)" % (a.port, a.feature), flush=True)
+    DATA_PATH = os.path.abspath(a.data)
+    srv = ThreadingHTTPServer((a.host, a.port), Handler)
+    print("SDLC flow desk on http://localhost:%d" % a.port, flush=True)
     srv.serve_forever()
