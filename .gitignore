@@ -10,3 +10,6 @@ demo-video/source/server.log
 dashboard/mail.json
 dashboard/.flow-secret
 dashboard/outbox/
+demo-video/source/outbox/
+demo-video/source/mailbox.log
+demo-video/source/.flow-secret
