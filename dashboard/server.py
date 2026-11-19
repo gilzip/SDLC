@@ -2,7 +2,7 @@
 
 Usage: python server.py [--port 8765] [--host 0.0.0.0] [--data data.xlsx]
 
-Flow per (project, sub-module) cell: Product -> AI Dev -> Dev -> QA -> end-to-end check.
+Flow per (project, sub-module) cell: Product -> Code Readiness -> AI Dev -> Dev -> QA -> end-to-end check.
 Every stage is closed by hand ("complete") by its owner, and only then does the next stage start.
 AI Dev runs outside the system; its owner just reports it finished. "back" sends a cell to
 the previous stage with a note. Every stage of every cell is assigned to an employee.
@@ -21,6 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # Employee roles. Each stage has one role; employees of that role are offered for it.
 ROLES = [
     {"key": "pm", "name": "מנהל מוצר"},
+    {"key": "readiness", "name": "אחראי מוכנות קוד"},
     {"key": "architect", "name": "ארכיטקט"},
     {"key": "dev", "name": "מתכנת"},
     {"key": "qa", "name": "QA"},
@@ -29,6 +30,8 @@ ROLE_KEYS = [r["key"] for r in ROLES]
 STAGES = [
     {"key": "pm", "name": "מנהל מוצר", "role": "pm", "done_label": "סיים איפיון",
      "hint": "מנהל המוצר מסיים את האיפיון"},
+    {"key": "readiness", "name": "מוכנות Source Code", "role": "readiness", "done_label": "ה-source code מוכן",
+     "hint": "בדיקה שה-source code של הפרויקט מוכן לפני הרצת סוכן ה-AI Dev (גישה, בנייה, סביבה)"},
     {"key": "aidev", "name": "פיתוח AI", "role": "architect", "done_label": "פיתוח ה-AI הסתיים",
      "hint": "הארכיטקט אחראי על הרצת סוכן ה-AI Dev מחוץ למערכת. עדכן כשהוא סיים"},
     {"key": "dev", "name": "מפתח", "role": "dev", "done_label": "הקוד נבדק ותקין",
@@ -162,29 +165,37 @@ def load():
             v = next((e["name"] for e in d["employees"] if e["email"].lower() == v.lower()), v)
         return v
 
+    pheader = [str(h) for h in next(wb[SH_PROJECTS].iter_rows(max_row=1, values_only=True))] if SH_PROJECTS in wb.sheetnames else []
+    role_cols = {r["key"]: next((i for i, h in enumerate(pheader) if h.startswith("ברירת מחדל: " + r["name"] + " (")), None)
+                 for r in ROLES}
     for r in rows(SH_PROJECTS):
         p = new_project(str(r[1]))
         p.update(id=str(r[0]), e2e=cellv(r, 2) == E2E_DONE_HE, e2e_by=cellv(r, 3), e2e_ts=cellv(r, 4) or 0)
-        p["owners"] = {k: owner(cellv(r, 5 + i)) for i, k in enumerate(ROLE_KEYS)}
+        p["owners"] = {k: owner(cellv(r, role_cols[k])) if role_cols[k] is not None else "" for k in ROLE_KEYS}
         d["projects"].append(p)
     byid = {p["id"]: p for p in d["projects"]}
     # assignment row: project id, project, module id, module, <stage states>, status, <stage owners>
     sheet = SH_ASSIGN if SH_ASSIGN in wb.sheetnames else LEGACY_FLOW
     header = next(wb[sheet].iter_rows(max_row=1, values_only=True)) if sheet in wb.sheetnames else ()
-    status_idx = header.index(STATUS_COL) if STATUS_COL in header else 4 + N
-    old_n = min(N, status_idx - 4)
+    names = [str(h) for h in header]
+    stage_cols = [names.index(s["name"]) if s["name"] in names else None for s in STAGES]
+    owner_cols = [next((i for i, h in enumerate(names) if h.startswith("אחראי: " + s["name"] + " (")), None) for s in STAGES]
     for r in rows(sheet):
         pid, mid = str(r[0]), str(r[2])
         if pid in byid and mid not in byid[pid]["modules"]:
             byid[pid]["modules"].append(mid)
-            st = [STATE_CODE.get(r[4 + i], "pend") if i < old_n else "pend" for i in range(N)]
+            st = [STATE_CODE.get(r[c], "pend") if c is not None else None for c in stage_cols]
+            # a stage added after the file was written counts as passed when later stages already started
+            for i in range(N):
+                if st[i] is None:
+                    st[i] = "done" if any(x not in (None, "pend") for x in st[i + 1:]) else "pend"
             # older files had 4 stages: if everything before the first open stage is done, that stage is in progress
             first = next((i for i, s in enumerate(st) if s != "done"), None)
             if first is not None and first > 0 and st[first] == "pend":
                 st[first] = "run"
-            owners = [owner(cellv(r, status_idx + 1 + i)) for i in range(N)]
-            if not any(owners):
-                owners = default_owners(byid[pid])
+            owners = [owner(cellv(r, c)) if c is not None else None for c in owner_cols]
+            fallback = default_owners(byid[pid])
+            owners = [fallback[i] if o is None or (not any(owners)) else o for i, o in enumerate(owners)]
             d["cells"][pid + ":" + mid] = {"stages": st, "log": [], "owners": owners}
     for r in rows(SH_LOG):
         entry = {"ts": float(r[2]), "m": str(r[3])}

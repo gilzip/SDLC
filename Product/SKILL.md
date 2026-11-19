@@ -1,6 +1,6 @@
 ---
 name: product
-description: Stage 1 of the SDLC flow (Product -> AI Dev -> Dev -> QA -> end-to-end check). Help the product manager specify one sub-module of one project - business need, rules, scope and acceptance criteria - in technology-independent terms. Use when a sub-module cell is in the Product stage. No document is required; the product manager closes the stage by hand on the dashboard.
+description: Stage 1 of the SDLC flow (Product -> Code Readiness -> AI Dev -> Dev -> QA -> end-to-end check). Help the product manager specify one sub-module of one project - business need, rules, scope and acceptance criteria - in technology-independent terms. Use when a sub-module cell is in the Product stage. No document is required; the product manager closes the stage by hand on the dashboard.
 ---
 
 # Product (stage 1)
@@ -22,4 +22,4 @@ Describe outcomes, not mechanisms. Do not choose technology, architecture, APIs 
 
 ## Closing the stage
 
-No document is required and none is checked. When the specification is done, the product manager presses "סיים איפיון" on the cell in the dashboard, and the cell moves to AI Dev. You do not close the stage yourself.
+No document is required and none is checked. When the specification is done, the product manager presses "סיים איפיון" on the cell in the dashboard, and the cell moves to Code Readiness. You do not close the stage yourself.

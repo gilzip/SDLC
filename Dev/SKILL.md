@@ -1,9 +1,9 @@
 ---
 name: dev
-description: Stage 3 of the SDLC flow (Product -> AI Dev -> Dev -> QA -> end-to-end check). The developer checks that the code the AI created for one project and sub-module works and is sound, fixing what is not. Use when a sub-module cell is in the Dev stage. No document is required; the developer closes the stage by hand on the dashboard.
+description: Stage 4 of the SDLC flow (Product -> Code Readiness -> AI Dev -> Dev -> QA -> end-to-end check). The developer checks that the code the AI created for one project and sub-module works and is sound, fixing what is not. Use when a sub-module cell is in the Dev stage. No document is required; the developer closes the stage by hand on the dashboard.
 ---
 
-# Dev (stage 3)
+# Dev (stage 4)
 
 You help the developer verify and fix the code the AI created for one **project x sub-module** cell.
 
