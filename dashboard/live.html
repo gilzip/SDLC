@@ -37,6 +37,9 @@ th.rowh{text-align:start;white-space:nowrap;min-width:130px}
 th .ed{opacity:.5;border:0;background:none;padding:0 4px;font-size:13px}
 th .ed:hover{opacity:1}
 td{padding:0}
+.c.dim{opacity:.25}
+#who-filter{font:inherit;padding:7px 10px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink)}
+.stages .own{font:inherit;font-size:13px;padding:3px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--ink);max-width:170px}
 th.e2eh{border-inline-start:2px solid var(--line);padding-inline-start:12px}
 td.e2ec{padding-inline-start:6px;border-inline-start:2px solid var(--line)}
 .stages select{font:inherit;padding:4px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
@@ -58,6 +61,8 @@ td.e2ec{padding-inline-start:6px;border-inline-start:2px solid var(--line)}
 .empty{padding:40px;text-align:center;color:var(--muted)}
 dialog{border:1px solid var(--line);border-radius:14px;background:var(--surface);color:var(--ink);padding:20px;width:min(520px,94vw)}
 dialog::backdrop{background:rgba(0,0,0,.4)}
+#dEmps{width:min(780px,96vw)}
+.row.emp input{min-width:0}
 dialog h2{margin:0 0 4px;font-size:18px}
 .muted{color:var(--muted);font-size:13px}
 label{display:block;margin:12px 0 4px;font-size:13px;color:var(--muted)}
@@ -90,8 +95,10 @@ input[type=text],textarea{width:100%;font:inherit;padding:8px 10px;border-radius
     </div>
   </div>
   <div class="bar">
+    <select id="who-filter" title="הצג את המשימות הנוכחיות של עובד"><option value="">כל העובדים</option></select>
     <button class="primary" id="addProject">+ פרויקט</button>
     <button id="manageModules">תת מודולים</button>
+    <button id="manageEmps">עובדים</button>
   </div>
 </header>
 <main><div id="matrix"></div></main>
@@ -100,6 +107,7 @@ input[type=text],textarea{width:100%;font:inherit;padding:8px 10px;border-radius
 <dialog id="dE2E"></dialog>
 <dialog id="dProject"></dialog>
 <dialog id="dModules"></dialog>
+<dialog id="dEmps"></dialog>
 
 <script>
 let S = null, lastJson = '';
@@ -121,16 +129,30 @@ async function refresh(force) {
   } catch (e) {}
 }
 
+const empName = email => (S.employees.find(e => e.email === email) || {}).name || '';
+const roleName = key => (S.roles.find(r => r.key === key) || {}).name || key;
+
 function cellInfo(c) {
   const st = c.stages;
   let cur = st.findIndex(s => s === 'run');
-  if (c.status === 'todo') return {lbl:'לא התחיל', sub:''};
-  if (c.status === 'done') return {lbl:'הסתיים', sub:'נבדק קצה לקצה'};
-  return {lbl:S.stages[cur].name, sub:'בעבודה'};
+  if (c.status === 'todo') return {lbl:'לא התחיל', sub:'', cur:-1};
+  if (c.status === 'done') return {lbl:'הסתיים', sub:'נבדק קצה לקצה', cur:-1};
+  return {lbl:S.stages[cur].name, sub:empName(c.owners[cur]) || 'ללא אחראי', cur};
+}
+
+/* employee filter in the header: dims every task that is not currently waiting on that employee */
+let filterEmail = '';
+$('who-filter').onchange = e => { filterEmail = e.target.value; render(); };
+function renderFilter() {
+  const sel = $('who-filter');
+  sel.innerHTML = '<option value="">כל העובדים</option>' + S.employees.map(e => `<option value="${esc(e.email)}">${esc(e.name)} (${esc(roleName(e.role))})</option>`).join('');
+  if (!S.employees.some(e => e.email === filterEmail)) filterEmail = '';
+  sel.value = filterEmail;
 }
 
 function render() {
   $('flow').textContent = 'זרימה: ' + S.stages.map(s => s.name).join(' ← ');
+  renderFilter();
   if (!S.projects.length) { $('matrix').innerHTML = '<div class="empty">אין פרויקטים. הוסף פרויקט להתחלה.</div>'; renderOpen(); return; }
   let h = '<table><thead><tr><th></th>';
   for (const m of S.modules) h += `<th>${esc(m.name)}</th>`;
@@ -142,12 +164,14 @@ function render() {
       if (!c) { h += '<td><span class="na" title="לא משויך"></span></td>'; continue; }
       const i = cellInfo(c);
       const pips = c.stages.map((s, k) => `<b class="${s==='done'?'on':s==='run'?'cur':''}"></b>`).join('');
-      h += `<td><button class="c ${c.status}" data-p="${p.id}" data-m="${m.id}"><span class="lbl">${esc(i.lbl)}</span><span class="pips">${pips}</span><span class="sub">${esc(i.sub)}</span></button></td>`;
+      const dim = filterEmail && !(i.cur >= 0 && c.owners[i.cur] === filterEmail) ? ' dim' : '';
+      h += `<td><button class="c ${c.status}${dim}" data-p="${p.id}" data-m="${m.id}"><span class="lbl">${esc(i.lbl)}</span><span class="pips">${pips}</span><span class="sub">${esc(i.sub)}</span></button></td>`;
     }
     if (p.e2e === 'na') h += '<td class="e2ec"><span class="na" title="אין תתי מודולים"></span></td>';
     else {
       const t = {todo:['ממתין לסיום תתי המודולים', `${p.done}/${p.total}`], run:['ממתין לבדיקה קצה לקצה', `${p.total}/${p.total} הסתיימו`], done:['הסתיים', 'נבדק קצה לקצה']}[p.e2e];
-      h += `<td class="e2ec"><button class="c ${p.e2e}" data-e="${p.id}"><span class="lbl">${t[0]}</span><span class="sub">${t[1]}</span></button></td>`;
+      const dimE = filterEmail && !(p.e2e === 'run' && p.owners.qa === filterEmail) ? ' dim' : '';
+      h += `<td class="e2ec"><button class="c ${p.e2e}${dimE}" data-e="${p.id}"><span class="lbl">${t[0]}</span><span class="sub">${t[1]}</span></button></td>`;
     }
     h += '</tr>';
   }
@@ -169,8 +193,9 @@ function renderCell() {
   const [pid, mid] = openKey;
   const p = S.projects.find(x => x.id === pid), m = S.modules.find(x => x.id === mid), c = S.cells[pid + ':' + mid];
   if (!p || !m || !c) { $('dCell').close(); return; }
-  const sig = JSON.stringify(c); if (sig === openSig) return; openSig = sig;
-  const who = localStorage.getItem('who') || '';
+  const sig = JSON.stringify([c, S.employees]); if (sig === openSig) return; openSig = sig;
+  const curStage = c.stages.findIndex(s => s === 'run');
+  const who = (curStage >= 0 && empName(c.owners[curStage])) || localStorage.getItem('who') || '';
   const note = $('note') ? $('note').value : '';
   let h = `<h2>${esc(p.name)} · ${esc(m.name)}</h2><div class="muted">כל שלב נסגר ידנית על ידי בעל התפקיד, ורק אז התא עובר לשלב הבא. אפשר להחזיר לשלב הקודם עם הערה.</div><ul class="stages">`;
   c.stages.forEach((s, k) => {
@@ -179,7 +204,7 @@ function renderCell() {
       act = `<button class="primary" data-a="complete" data-k="${k}">${esc(S.stages[k].done_label)}</button>`;
       if (k > 0) act += `<button class="danger" data-a="back" data-k="${k}">החזר ל${esc(S.stages[k-1].name)}</button>`;
     }
-    h += `<li class="${s}"><span class="n">${k+1}</span><span><b>${esc(S.stages[k].name)}</b>${s==='run' ? `<div class="hint">${esc(S.stages[k].hint)}</div>` : ''}</span><span class="st">${STATE_HE[s]}</span>${act}</li>`;
+    h += `<li class="${s}"><span class="n">${k+1}</span><span><b>${esc(S.stages[k].name)}</b>${s==='run' ? `<div class="hint">${esc(S.stages[k].hint)}</div>` : ''}</span><span class="st">${STATE_HE[s]}</span>${ownerSelect(S.stages[k].role, c.owners[k], k)}${act}</li>`;
   });
   h += '</ul>';
   h += `<label for="who">שם בעל התפקיד</label><input type="text" id="who" value="${esc(who)}" placeholder="למשל: דנה, מנהלת מוצר">`;
@@ -192,6 +217,18 @@ function renderCell() {
   h += '</span><button data-close>סגור</button></div>';
   $('dCell').innerHTML = h;
 }
+/* employee picker: people with the stage's role first, everyone else under "other" */
+function ownerSelect(role, current, k) {
+  const opt = e => `<option value="${esc(e.email)}" ${e.email === current ? 'selected' : ''}>${esc(e.name)}</option>`;
+  const mine = S.employees.filter(e => e.role === role), rest = S.employees.filter(e => e.role !== role);
+  return `<select class="own" data-k="${k}" title="אחראי: ${esc(roleName(role))}"><option value="">ללא אחראי (${esc(roleName(role))})</option>` +
+    mine.map(opt).join('') + (rest.length ? `<optgroup label="תפקידים אחרים">${rest.map(opt).join('')}</optgroup>` : '') + '</select>';
+}
+$('dCell').addEventListener('change', async e => {
+  const s = e.target.closest('select.own'); if (!s) return;
+  try { await api('/api/cell/assign', {project:openKey[0], module:openKey[1], stage:+s.dataset.k, employee:s.value}); }
+  catch (er) { $('cerr').textContent = er.message; }
+});
 $('dCell').addEventListener('click', async e => {
   if (e.target.closest('[data-close]')) return $('dCell').close();
   const b = e.target.closest('[data-a]'); if (!b) return;
@@ -212,8 +249,8 @@ function renderE2E() {
   const p = S.projects.find(x => x.id === e2eId);
   if (!p) { $('dE2E').close(); return; }
   const mods = S.modules.filter(m => p.modules.includes(m.id));
-  const sig = JSON.stringify([p, mods.map(m => S.cells[p.id + ':' + m.id].stages)]); if (sig === e2eSig) return; e2eSig = sig;
-  const who = $('ewho') ? $('ewho').value : (localStorage.getItem('who') || ''), note = $('enote') ? $('enote').value : '';
+  const sig = JSON.stringify([p, S.employees, mods.map(m => S.cells[p.id + ':' + m.id].stages)]); if (sig === e2eSig) return; e2eSig = sig;
+  const who = $('ewho') ? $('ewho').value : (empName(p.owners.qa) || localStorage.getItem('who') || ''), note = $('enote') ? $('enote').value : '';
   let h = `<h2>${esc(p.name)} · בדיקה קצה לקצה לפרויקט</h2><div class="muted">נפתחת רק אחרי שכל תתי המודולים של הפרויקט סיימו את כל שלביהם, כולל הבדיקה קצה לקצה שלהם. האישור ידני. אם נמצאה תקלה, פתח מחדש את תת המודול הרלוונטי בשלב המתאים.</div><ul class="stages">`;
   for (const m of mods) {
     const c = S.cells[p.id + ':' + m.id];
@@ -223,6 +260,7 @@ function renderE2E() {
   }
   h += '</ul>';
   if (!mods.length) h += '<div class="muted">אין תתי מודולים משויכים לפרויקט.</div>';
+  h += `<div class="muted" style="margin-top:10px">אחראי לבדיקה (QA): ${esc(empName(p.owners.qa) || 'לא הוגדר. הגדר בעריכת הפרויקט')}</div>`;
   h += `<label for="ewho">שם המאשר</label><input type="text" id="ewho" value="${esc(who)}">`;
   h += `<label for="enote">הערה (נדרשת בפתיחה מחדש)</label><input type="text" id="enote" value="${esc(note)}"><div class="err" id="eerr"></div>`;
   h += `<ul class="log">${p.log.map(l => `<li>${new Date(l.ts*1000).toLocaleString('he-IL',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})} · ${esc(l.m)}</li>`).join('')}</ul>`;
@@ -252,9 +290,15 @@ $('dE2E').addEventListener('close', () => { e2eId = null; });
 /* ---------- project add / edit ---------- */
 $('addProject').onclick = () => openProject(null);
 function openProject(pid) {
-  const p = pid ? S.projects.find(x => x.id === pid) : {name:'', modules:[]};
+  const p = pid ? S.projects.find(x => x.id === pid) : {name:'', modules:[], owners:{}};
   let h = `<h2>${pid ? 'עריכת פרויקט' : 'פרויקט חדש'}</h2>`;
   h += `<label for="pn">שם הפרויקט</label><input type="text" id="pn" value="${esc(p.name)}">`;
+  h += '<label>אחראים לפרויקט (לפי תפקיד)</label>';
+  for (const r of S.roles) {
+    const list = S.employees.filter(e => e.role === r.key).concat(S.employees.filter(e => e.role !== r.key));
+    h += `<div class="row"><span style="min-width:90px">${esc(r.name)}</span><select data-role="${r.key}" data-orig="${esc(p.owners[r.key] || '')}" style="flex:1;font:inherit;padding:6px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)"><option value="">ללא</option>${list.map(e => `<option value="${esc(e.email)}" ${e.email === p.owners[r.key] ? 'selected' : ''}>${esc(e.name)}${e.role !== r.key ? ' (' + esc(roleName(e.role)) + ')' : ''}</option>`).join('')}</select></div>`;
+  }
+  h += '<div class="muted">שינוי אחראי כאן מחליף את האחראי בכל המשימות של הפרויקט. אפשר לשנות משימה בודדת בחלון התא.</div>';
   h += '<label>תת מודולים משויכים</label>';
   if (!S.modules.length) h += '<div class="muted">אין תת מודולים. הוסף דרך "תת מודולים".</div>';
   for (const m of S.modules) h += `<label class="chk"><input type="checkbox" value="${m.id}" ${p.modules.includes(m.id)?'checked':''}> ${esc(m.name)}</label>`;
@@ -271,11 +315,16 @@ $('dProject').addEventListener('click', async e => {
     if (e.target.id === 'psave') {
       const name = $('pn').value.trim(); if (!name) { $('perr').textContent = 'יש להזין שם'; return; }
       const mods = [...d.querySelectorAll('input[type=checkbox]:checked')].map(x => x.value);
-      if (pid) await api('/api/project/update', {id:pid, name, modules:mods});
+      // owners are sent only for roles the user changed, so a rename never overwrites per-task assignments
+      const owners = {};
+      d.querySelectorAll('select[data-role]').forEach(s => { if (s.value !== s.dataset.orig) owners[s.dataset.role] = s.value; });
+      const body = {name, modules:mods};
+      if (Object.keys(owners).length) body.owners = owners;
+      if (pid) await api('/api/project/update', {id:pid, ...body});
       else {
         await api('/api/project', {name});
         const created = S.projects[S.projects.length - 1];
-        if (mods.length) await api('/api/project/update', {id:created.id, modules:mods});
+        if (mods.length || body.owners) await api('/api/project/update', {id:created.id, ...body});
       }
       d.close();
     }
@@ -306,6 +355,35 @@ $('dModules').addEventListener('click', async e => {
       await api('/api/module/delete', {id:row.dataset.id}); renderModules();
     }
   } catch (er) { renderModules(er.message); }
+});
+
+/* ---------- employees ---------- */
+$('manageEmps').onclick = () => { renderEmps(); $('dEmps').showModal(); };
+const roleOptions = sel => S.roles.map(r => `<option value="${r.key}" ${r.key === sel ? 'selected' : ''}>${esc(r.name)}</option>`).join('');
+function renderEmps(err, keep) {
+  let h = '<h2>עובדים</h2><div class="muted">כל משימה בזרם משויכת לעובד. הכתובת משמשת מזהה, ושינוי שלה מתעדכן בכל המשימות. מחיקת עובד מסירה אותו מכל המשימות.</div>';
+  if (!S.employees.length) h += '<div class="muted" style="margin-top:10px">עדיין אין עובדים. הוסף למטה.</div>';
+  for (const e of S.employees)
+    h += `<div class="row emp" data-email="${esc(e.email)}"><input type="text" class="en" value="${esc(e.name)}" aria-label="שם"><input type="text" class="ee" value="${esc(e.email)}" dir="ltr" aria-label="אימייל"><select class="er" aria-label="תפקיד">${roleOptions(e.role)}</select><button data-save>שמור</button><button class="danger" data-del>מחק</button></div>`;
+  h += `<label>עובד חדש</label><div class="row"><input type="text" id="enm" placeholder="שם" value="${esc(keep?.name || '')}"><input type="text" id="eem" placeholder="name@company.com" dir="ltr" value="${esc(keep?.email || '')}"><select id="erl">${roleOptions(keep?.role)}</select><button class="primary" id="eadd">הוסף</button></div>`;
+  h += `<div class="err" id="emerr">${esc(err || '')}</div><div class="foot"><span></span><button data-close>סגור</button></div>`;
+  $('dEmps').innerHTML = h;
+}
+$('dEmps').addEventListener('click', async e => {
+  const d = $('dEmps'), row = e.target.closest('.row.emp');
+  try {
+    if (e.target.closest('[data-close]')) return d.close();
+    if (e.target.id === 'eadd') {
+      const draft = {name:$('enm').value.trim(), email:$('eem').value.trim(), role:$('erl').value};
+      try { await api('/api/employee', draft); renderEmps(); } catch (er) { renderEmps(er.message, draft); }
+    } else if (row && e.target.matches('[data-save]')) {
+      await api('/api/employee/update', {email:row.dataset.email, name:row.querySelector('.en').value, new_email:row.querySelector('.ee').value, role:row.querySelector('.er').value});
+      renderEmps();
+    } else if (row && e.target.matches('[data-del]')) {
+      if (e.target.dataset.sure !== '1') { e.target.dataset.sure = '1'; e.target.textContent = 'בטוח?'; return; }
+      await api('/api/employee/delete', {email:row.dataset.email}); renderEmps();
+    }
+  } catch (er) { renderEmps(er.message); }
 });
 
 refresh(true); setInterval(refresh, 2000);

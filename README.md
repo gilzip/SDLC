@@ -16,6 +16,19 @@ A stage owner who finds a problem presses "return to the previous stage" with a 
 
 Colors: red = not started, light blue = in progress, green = done.
 
+## Employees and task owners
+
+Every stage of every cell is assigned to an employee. Employees live in the `עובדים` sheet (name, email, role) and are managed from the "עובדים" button. Email is the unique key.
+
+| Role | Responsible for |
+|------|-----------------|
+| מנהל מוצר (product manager) | stage 1, the specification |
+| ארכיטקט (architect) | stage 2, running the AI Dev agent outside the system |
+| מתכנת (programmer) | stage 3, checking the generated code works against the requirements |
+| QA | stages 4 and 5, and the project-level end-to-end check |
+
+Set the four role owners per project in the project dialog; they apply to every task of that project. Any single task can then be reassigned in the cell dialog. The header filter shows only the tasks currently waiting on a chosen employee. Emails are stored, but the system does not send any messages.
+
 ## Run
 
 ```
