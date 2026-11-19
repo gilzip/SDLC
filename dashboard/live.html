@@ -63,6 +63,10 @@ td.e2ec{padding-inline-start:6px;border-inline-start:2px solid var(--line)}
 .empty{padding:40px;text-align:center;color:var(--muted)}
 dialog{border:1px solid var(--line);border-radius:14px;background:var(--surface);color:var(--ink);padding:20px;width:min(520px,94vw)}
 dialog::backdrop{background:rgba(0,0,0,.4)}
+.bar{align-items:flex-end;gap:18px}
+.bar .grp{display:flex;flex-direction:column;gap:4px}
+.bar .gl{font-size:12px;color:var(--muted)}
+.bar .btns{display:flex;gap:8px}
 #dEmps{width:min(780px,96vw)}
 #dAssignM,#dAssignE{width:min(980px,96vw)}
 .scroll{overflow:auto;max-height:55vh;margin-top:12px}
@@ -105,12 +109,15 @@ input[type=text],textarea{width:100%;font:inherit;padding:8px 10px;border-radius
     </div>
   </div>
   <div class="bar">
-    <select id="who-filter" title="הצג את המשימות הנוכחיות של עובד"><option value="">כל העובדים</option></select>
-    <button class="primary" id="addProject">+ פרויקט</button>
-    <button id="manageModules">תת מודולים</button>
-    <button id="manageEmps">עובדים</button>
-    <button id="assignModules">שיוך תת מודולים</button>
-    <button id="assignEmps">שיוך עובדים</button>
+    <div class="grp"><span class="gl">סינון</span>
+      <select id="who-filter" title="הצג את המשימות הנוכחיות של עובד"><option value="">כל העובדים</option></select>
+    </div>
+    <div class="grp"><span class="gl">רשימות (הוספה, עריכה, מחיקה)</span>
+      <span class="btns"><button id="manageProjects">פרויקטים</button><button id="manageModules">תת מודולים</button><button id="manageEmps">עובדים</button></span>
+    </div>
+    <div class="grp"><span class="gl">שיוך</span>
+      <span class="btns"><button id="assignModules">תת מודולים לפרויקטים</button><button id="assignEmps">עובדים לפרויקטים</button></span>
+    </div>
   </div>
 </header>
 <div id="banner" class="banner" role="alert" hidden></div>
@@ -120,6 +127,7 @@ input[type=text],textarea{width:100%;font:inherit;padding:8px 10px;border-radius
 <dialog id="dE2E"></dialog>
 <dialog id="dProject"></dialog>
 <dialog id="dModules"></dialog>
+<dialog id="dProjects"></dialog>
 <dialog id="dEmps"></dialog>
 <dialog id="dAssignM"></dialog>
 <dialog id="dAssignE"></dialog>
@@ -310,7 +318,30 @@ $('dE2E').addEventListener('click', async e => {
 $('dE2E').addEventListener('close', () => { e2eId = null; });
 
 /* ---------- project add / edit: the project itself is only a name ---------- */
-$('addProject').onclick = () => openProject(null);
+$('manageProjects').onclick = () => { renderProjects(); $('dProjects').showModal(); };
+function renderProjects(err, keep) {
+  let h = '<h2>פרויקטים</h2><div class="muted">רשימת הפרויקטים. שינוי שם מתעדכן בכל מקום. מחיקת פרויקט מוחקת את כל הזרמים שלו. תתי המודולים והעובדים משויכים בנפרד במסכים "שיוך תת מודולים" ו"שיוך עובדים".</div>';
+  for (const p of S.projects) h += `<div class="row" data-id="${p.id}"><input type="text" value="${esc(p.name)}" aria-label="שם הפרויקט"><button data-save>שמור</button><button class="danger" data-del>מחק</button></div>`;
+  if (!S.projects.length) h += '<div class="muted" style="margin-top:10px">אין פרויקטים. הוסף למטה.</div>';
+  h += `<label for="npn">פרויקט חדש</label><div class="row"><input type="text" id="npn" placeholder="שם" value="${esc(keep || '')}"><button class="primary" id="padd">הוסף</button></div>`;
+  h += `<div class="err" id="pmerr">${esc(err || '')}</div><div class="foot"><span></span><button data-close>סגור</button></div>`;
+  $('dProjects').innerHTML = h;
+}
+$('dProjects').addEventListener('click', async e => {
+  const d = $('dProjects'), row = e.target.closest('.row[data-id]');
+  try {
+    if (e.target.closest('[data-close]')) return d.close();
+    if (e.target.id === 'padd') { const n = $('npn').value.trim(); if (!n) return; await api('/api/project', {name:n}); renderProjects(); }
+    else if (row && e.target.matches('[data-save]')) {
+      const n = row.querySelector('input').value.trim(); if (!n) throw new Error('יש להזין שם');
+      await api('/api/project/update', {id:row.dataset.id, name:n}); renderProjects();
+    } else if (row && e.target.matches('[data-del]')) {
+      if (e.target.dataset.sure !== '1') { e.target.dataset.sure = '1'; e.target.textContent = 'בטוח?'; return; }
+      await api('/api/project/delete', {id:row.dataset.id}); renderProjects();
+    }
+  } catch (er) { renderProjects(er.message); }
+});
+
 function openProject(pid) {
   const p = pid ? S.projects.find(x => x.id === pid) : {name:''};
   let h = `<h2>${pid ? 'עריכת פרויקט' : 'פרויקט חדש'}</h2>`;
